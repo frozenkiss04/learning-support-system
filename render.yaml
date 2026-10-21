@@ -1,0 +1,63 @@
+# ============================================================
+# Render Blueprint — deploy backend Flask (frontend deploy riêng trên Vercel).
+# Tạo service: Render Dashboard > New > Blueprint > chọn repo này.
+# Root directory của service là backend/ (khai báo rootDir bên dưới).
+#
+# Phương án thay thế: deploy dạng Docker bằng backend/Dockerfile
+# (đổi runtime: docker, dockerfilePath: ./Dockerfile, bỏ build/startCommand).
+#
+# --- Sau khi service chạy lần đầu (Render Shell, thư mục backend) ---
+# Thư mục migrations/ hiện CHƯA có Alembic env (chỉ có README) nên
+# `flask db upgrade` CHƯA chạy được. Hai lựa chọn:
+#   1) Nhanh (lần đầu/demo):  flask seed
+#      -> seed tự db.create_all() + tạo admin + khoá học mẫu, chạy lại an toàn.
+#   2) Chuẩn lâu dài: ở máy dev chạy `flask db init && flask db migrate`
+#      rồi commit thư mục migrations/, sau đó mỗi lần deploy chạy:
+#           flask db upgrade && flask seed
+# Khi đã có migrations đầy đủ và dùng gói trả phí, có thể bật sẵn:
+#   preDeployCommand: flask db upgrade
+# (preDeployCommand chỉ khả dụng ở plan trả phí; plan free chạy tay qua Shell.)
+# ============================================================
+services:
+  - type: web
+    name: learning-support-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    buildCommand: pip install -r requirements.txt
+    # $PORT do Render cấp — không hardcode cổng. Worker/thread khớp Dockerfile.
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: FLASK_ENV
+        value: production
+      # --- Secret: Render tự sinh, không lưu trong repo ---
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      # --- Bắt buộc nhập tay trong Dashboard (sync: false = không sync về repo) ---
+      - key: DATABASE_URL # Neon POOLED connection string (host có -pooler)
+        sync: false
+      - key: CORS_ORIGINS # domain FE Vercel, vd https://your-frontend.vercel.app
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY # chỉ bắt buộc nếu AI_PROVIDER=gemini
+        sync: false
+      - key: OPENAI_API_KEY # chỉ bắt buộc nếu AI_PROVIDER=openai
+        sync: false
+      # --- Giá trị mặc định, sửa được trên Dashboard ---
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_MODEL
+        value: gemini-2.0-flash
+      - key: AI_DAILY_LIMIT
+        value: "50"
+      - key: WEB_CONCURRENCY
+        value: "2"
