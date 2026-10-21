@@ -28,7 +28,7 @@ services:
     healthCheckPath: /health
     buildCommand: pip install -r requirements.txt
     # $PORT do Render cấp — không hardcode cổng. Worker/thread khớp Dockerfile.
-    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
+    startCommand: flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
