@@ -2,14 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
+  Award,
+  CalendarCheck,
   CalendarDays,
   CheckCircle2,
   Flame,
+  GraduationCap,
   KeyRound,
   Loader2,
   LogOut,
   Mail,
   ShieldCheck,
+  Sprout,
   User,
   Zap,
 } from "lucide-react";
@@ -52,6 +56,7 @@ export default function ProfilePage() {
   const setUser = useAuthStore((state) => state.setUser);
 
   const [profile, setProfile] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -85,6 +90,22 @@ export default function ProfilePage() {
   useEffect(() => {
     loadProfile();
   }, [loadProfile]);
+
+  // Số liệu cho huy hiệu: GET /api/progress/summary (xp, current_streak,
+  // longest_streak, completed_lessons). Lỗi thì bỏ qua, huy hiệu dùng số
+  // liệu sẵn có trong profile.
+  const loadSummary = useCallback(async () => {
+    try {
+      const data = await apiGet("/api/progress/summary");
+      setSummary(data);
+    } catch {
+      setSummary(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
 
   const handleFormChange = (event) => {
     const { name, value } = event.target;
@@ -153,6 +174,63 @@ export default function ProfilePage() {
         ? "border-red-300 focus:border-red-400"
         : "border-slate-300 focus:border-green-700"
     }`;
+
+  // Huy hiệu thành tích: ưu tiên số liệu từ /api/progress/summary,
+  // thiếu thì dùng số liệu trong profile (xp, current_streak).
+  const badgeXp = Number(summary?.xp ?? profile?.xp ?? 0);
+  const badgeCurrentStreak = Number(
+    summary?.current_streak ?? profile?.current_streak ?? 0
+  );
+  const badgeBestStreak = Math.max(
+    Number(summary?.longest_streak ?? 0),
+    badgeCurrentStreak
+  );
+  const badgeCompleted = Number(summary?.completed_lessons ?? 0);
+  const badges = [
+    {
+      key: "khoi-dau",
+      name: "Khởi đầu",
+      condition: "Hoàn thành bài học đầu tiên",
+      icon: Sprout,
+      achieved: badgeCompleted >= 1,
+    },
+    {
+      key: "chuyen-can",
+      name: "Chuyên cần",
+      condition: "Đạt chuỗi 3 ngày học liên tiếp",
+      icon: CalendarCheck,
+      achieved: badgeBestStreak >= 3,
+    },
+    {
+      key: "lua-hoc-tap",
+      name: "Lửa học tập",
+      condition: "Đạt chuỗi 7 ngày học liên tiếp",
+      icon: Flame,
+      achieved: badgeBestStreak >= 7,
+    },
+    {
+      key: "hoc-gia",
+      name: "Học giả",
+      condition: "Hoàn thành 10 bài học",
+      icon: GraduationCap,
+      achieved: badgeCompleted >= 10,
+    },
+    {
+      key: "tich-luy",
+      name: "Tích lũy",
+      condition: "Đạt 100 XP",
+      icon: Zap,
+      achieved: badgeXp >= 100,
+    },
+    {
+      key: "dai-su-tri-thuc",
+      name: "Đại sứ tri thức",
+      condition: "Đạt 500 XP",
+      icon: Award,
+      achieved: badgeXp >= 500,
+    },
+  ];
+  const achievedCount = badges.filter((badge) => badge.achieved).length;
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
@@ -272,6 +350,63 @@ export default function ProfilePage() {
               <p className="mt-1 text-sm text-slate-600">
                 Số ngày học liên tiếp hiện tại của bạn.
               </p>
+            </div>
+          </section>
+
+          {/* Huy hiệu thành tích */}
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
+              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <Award className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                Huy hiệu thành tích
+              </h2>
+              <span className="text-xs font-medium text-slate-500">
+                Đã đạt {achievedCount}/{badges.length}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 px-6 py-5 sm:grid-cols-3">
+              {badges.map((badge) => {
+                const BadgeIcon = badge.icon;
+                return (
+                  <div
+                    key={badge.key}
+                    className={
+                      badge.achieved
+                        ? "rounded-lg border border-primary-200 bg-primary-50 px-4 py-4"
+                        : "rounded-lg border border-slate-200 bg-slate-50 px-4 py-4 opacity-60"
+                    }
+                  >
+                    <div
+                      className={
+                        badge.achieved
+                          ? "flex h-10 w-10 items-center justify-center rounded-lg border border-primary-200 bg-white text-primary-700"
+                          : "flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-400"
+                      }
+                      aria-hidden="true"
+                    >
+                      <BadgeIcon className="h-5 w-5" />
+                    </div>
+                    <p
+                      className={
+                        badge.achieved
+                          ? "mt-3 text-sm font-semibold text-slate-900"
+                          : "mt-3 text-sm font-semibold text-slate-500"
+                      }
+                    >
+                      {badge.name}
+                    </p>
+                    <p
+                      className={
+                        badge.achieved
+                          ? "mt-0.5 text-xs font-medium text-primary-700"
+                          : "mt-0.5 text-xs text-slate-500"
+                      }
+                    >
+                      {badge.achieved ? "Đã đạt" : badge.condition}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </section>
 

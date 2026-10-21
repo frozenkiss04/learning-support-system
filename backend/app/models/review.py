@@ -61,6 +61,9 @@ class ReviewCard(db.Model):
             "last_result": self.last_result,
         }
         if include_exercise and self.exercise is not None:
-            # Never leak correct_answer to learners (same rule as lesson detail).
-            data["exercise"] = self.exercise.to_dict()
+            # Review cards only exist for exercises the learner has already
+            # answered inside a lesson, so showing the answer here is safe and
+            # required: the flashcard flow asks learners to self-grade after
+            # flipping the card. (Lesson detail still never leaks answers.)
+            data["exercise"] = self.exercise.to_dict(include_answer=True)
         return data

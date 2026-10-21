@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Crown, Loader2, Trophy, Users } from "lucide-react";
+import { AlertCircle, Loader2, Medal, Trophy, Users } from "lucide-react";
 import { apiGet } from "../../lib/api";
 import { useAuthStore } from "../../stores/authStore";
+
+function initialsOf(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  const first = parts[0]?.[0] || "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (first + last).toUpperCase();
+}
 
 /**
  * Bảng xếp hạng học viên (top 20 theo XP).
@@ -40,6 +48,10 @@ export default function LeaderboardPage() {
       (currentUser.email && entry.email === currentUser.email));
 
   const myRank = entries.findIndex((entry) => isCurrentUser(entry));
+
+  // Podium hiển thị theo thứ tự cột: hạng 2 — hạng 1 — hạng 3.
+  const podiumOrder = [1, 0, 2].filter((i) => entries[i]);
+  const rest = entries.slice(3);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
@@ -96,8 +108,67 @@ export default function LeaderboardPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[480px] text-left text-sm">
+          <div>
+            {/* Podium top 3 */}
+            <div className="flex items-end justify-center gap-4 border-b border-slate-200 px-6 pb-0 pt-8 sm:gap-8">
+              {podiumOrder.map((entryIndex) => {
+                const entry = entries[entryIndex];
+                const rank = entryIndex + 1;
+                const mine = isCurrentUser(entry);
+                const pedestalHeight =
+                  rank === 1 ? "h-20" : rank === 2 ? "h-14" : "h-10";
+                return (
+                  <div
+                    key={entry.id}
+                    className="flex w-28 flex-col items-center text-center sm:w-36"
+                  >
+                    {rank === 1 ? (
+                      <Trophy
+                        className="h-6 w-6 text-amber-500"
+                        aria-label="Hạng nhất"
+                      />
+                    ) : (
+                      <Medal
+                        className="h-5 w-5 text-slate-400"
+                        aria-label={`Hạng ${rank}`}
+                      />
+                    )}
+                    <div
+                      className={`mt-2 flex items-center justify-center rounded-full font-semibold ${
+                        rank === 1
+                          ? "h-16 w-16 bg-primary-700 text-lg text-white"
+                          : "h-12 w-12 bg-slate-200 text-sm text-slate-700"
+                      } ${mine ? "ring-2 ring-primary-700 ring-offset-2" : ""}`}
+                      aria-hidden="true"
+                    >
+                      {initialsOf(entry.full_name)}
+                    </div>
+                    <p className="mt-2 w-full truncate text-sm font-semibold text-slate-900">
+                      {entry.full_name}
+                      {mine && (
+                        <span className="ml-1.5 inline-flex items-center rounded-md border border-slate-300 bg-white px-1.5 py-0.5 align-middle text-xs font-medium text-slate-600">
+                          Bạn
+                        </span>
+                      )}
+                    </p>
+                    <p className="mt-0.5 text-xs tabular-nums text-slate-500">
+                      {Number(entry.xp || 0).toLocaleString("vi-VN")} XP
+                    </p>
+                    <div
+                      className={`mt-3 flex w-full items-start justify-center rounded-t-lg border border-b-0 border-slate-200 bg-slate-50 pt-2 text-lg font-bold text-slate-400 ${pedestalHeight}`}
+                      aria-hidden="true"
+                    >
+                      {rank}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Hạng 4 trở đi */}
+            {rest.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[480px] text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th
@@ -120,53 +191,49 @@ export default function LeaderboardPage() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {entries.map((entry, index) => {
-                  const mine = isCurrentUser(entry);
-                  return (
-                    <tr
-                      key={entry.id}
-                      className={
-                        mine
-                          ? "bg-slate-100"
-                          : "bg-white hover:bg-slate-50"
-                      }
-                    >
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900">
-                          {index + 1}
-                          {index === 0 && (
-                            <Crown
-                              className="h-4 w-4 text-amber-600"
-                              aria-label="Hạng nhất"
-                            />
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
+                  <tbody className="divide-y divide-slate-100">
+                    {rest.map((entry, index) => {
+                      const mine = isCurrentUser(entry);
+                      return (
+                        <tr
+                          key={entry.id}
                           className={
                             mine
-                              ? "font-semibold text-slate-900"
-                              : "font-medium text-slate-700"
+                              ? "bg-slate-100"
+                              : "bg-white hover:bg-slate-50"
                           }
                         >
-                          {entry.full_name}
-                        </span>
-                        {mine && (
-                          <span className="ml-2 inline-flex items-center rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-xs font-medium text-slate-600">
-                            Bạn
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
-                        {Number(entry.xp || 0).toLocaleString("vi-VN")}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                          <td className="px-4 py-3">
+                            <span className="font-semibold text-slate-900">
+                              {index + 4}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={
+                                mine
+                                  ? "font-semibold text-slate-900"
+                                  : "font-medium text-slate-700"
+                              }
+                            >
+                              {entry.full_name}
+                            </span>
+                            {mine && (
+                              <span className="ml-2 inline-flex items-center rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-xs font-medium text-slate-600">
+                                Bạn
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
+                            {Number(entry.xp || 0).toLocaleString("vi-VN")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>
