@@ -5,6 +5,7 @@ import AuthLayout from './layouts/AuthLayout.jsx'
 import LearnerLayout from './layouts/LearnerLayout.jsx'
 import AdminLayout from './layouts/AdminLayout.jsx'
 import ProtectedRoute from './routes/ProtectedRoute.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 
 // Route-level code splitting: every page is a lazy chunk so the initial
 // bundle only carries the app shell (layouts, router, auth guard).
@@ -36,6 +37,7 @@ function PageFallback() {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <Routes>
       {/* Public — auth */}
       <Route element={<AuthLayout />}>
@@ -160,5 +162,6 @@ export default function App() {
 
       <Route path="*" element={<Navigate to="/learn" replace />} />
     </Routes>
+    </ErrorBoundary>
   )
 }
