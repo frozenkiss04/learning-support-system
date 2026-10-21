@@ -5,12 +5,16 @@ Registered by the app factory under ``/api/progress``:
 - ``GET  /due``                    review cards that are due now
 - ``POST /review/<exercise_id>``   grade one review answer, reschedule its card
 - ``GET  /summary``                XP, streak, completed lessons, due count
+- ``GET  /activity``               per-day study activity (heatmap data)
 """
+from datetime import datetime, timedelta, timezone
+
 from flask import Blueprint, request
 from flask_jwt_extended import jwt_required
+from sqlalchemy import func
 
 from ..extensions import db
-from ..models.learning import Exercise, Streak, UserProgress
+from ..models.learning import Attempt, Exercise, Streak, UserProgress
 from ..services.srs_service import due_cards, due_count, record_result
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
@@ -18,6 +22,10 @@ from ..utils.security import current_user
 progress_bp = Blueprint("progress", __name__)
 
 MAX_DUE_LIMIT = 100
+
+DEFAULT_ACTIVITY_DAYS = 84
+MIN_ACTIVITY_DAYS = 7
+MAX_ACTIVITY_DAYS = 182
 
 
 @progress_bp.get("/due")
@@ -62,4 +70,38 @@ def summary():
         "longest_streak": streak.longest_streak if streak else 0,
         "completed_lessons": completed,
         "due_reviews": due_count(user.id),
+    })
+
+
+@progress_bp.get("/activity")
+@jwt_required()
+def activity():
+    user = current_user()
+    days = request.args.get("days", DEFAULT_ACTIVITY_DAYS, type=int)
+    days = max(MIN_ACTIVITY_DAYS, min(days or DEFAULT_ACTIVITY_DAYS, MAX_ACTIVITY_DAYS))
+
+    # Attempts are timestamped in UTC (see Attempt.created_at), so the window
+    # is anchored on the current UTC date and days are bucketed by UTC date.
+    # The count is grouped in SQL — no per-row loading into Python.
+    since = datetime.now(timezone.utc).date() - timedelta(days=days - 1)
+    day_col = func.date(Attempt.created_at)
+    rows = (
+        db.session.query(day_col.label("day"), func.count(Attempt.id).label("count"))
+        .filter(Attempt.user_id == user.id, day_col >= since)
+        .group_by(day_col)
+        .order_by(day_col.asc())
+        .all()
+    )
+    entries = [
+        {
+            # SQLite yields a "YYYY-MM-DD" string, Postgres a date object.
+            "date": row.day.isoformat() if hasattr(row.day, "isoformat") else str(row.day),
+            "count": int(row.count),
+        }
+        for row in rows
+    ]
+    return ok({
+        "days": entries,
+        "total_active_days": len(entries),
+        "total_actions": sum(entry["count"] for entry in entries),
     })

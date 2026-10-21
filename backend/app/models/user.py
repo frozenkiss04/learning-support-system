@@ -46,7 +46,8 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     full_name = db.Column(db.String(FULL_NAME_MAX_LENGTH), nullable=False)
     role = db.Column(db.String(20), nullable=False, default=ROLE_LEARNER)
-    xp = db.Column(db.Integer, nullable=False, default=0)
+    # Indexed: the leaderboard query orders all users by xp DESC.
+    xp = db.Column(db.Integer, nullable=False, default=0, index=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     # Tăng mỗi khi đổi mật khẩu / bị khóa: token JWT mang claim "tv" khác giá trị
     # này sẽ bị coi là đã thu hồi (xem utils/security.py).

@@ -114,3 +114,52 @@ def test_submit_unknown_lesson_returns_404(client, learner_headers):
     resp = client.post("/api/lessons/999999/submit",
                        json={"answers": {}}, headers=learner_headers)
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Study activity heatmap: GET /api/progress/activity.
+# Source of truth is the attempts table (one row per graded exercise),
+# bucketed by UTC day.
+# ---------------------------------------------------------------------------
+
+
+def test_activity_requires_auth(client):
+    resp = client.get("/api/progress/activity")
+    assert resp.status_code == 401
+
+
+def test_activity_empty_before_any_submit(client, learner_headers):
+    resp = client.get("/api/progress/activity", headers=learner_headers)
+    assert resp.status_code == 200
+    data = resp.get_json()["data"]
+    assert data["days"] == []
+    assert data["total_active_days"] == 0
+    assert data["total_actions"] == 0
+
+
+def test_activity_counts_attempts_by_day(client, sample_course, learner_headers):
+    from datetime import datetime, timezone
+
+    _submit(client, sample_course, sample_course["correct_answers"], learner_headers)
+
+    resp = client.get("/api/progress/activity", headers=learner_headers)
+    assert resp.status_code == 200
+    data = resp.get_json()["data"]
+    assert "days" in data
+    assert "total_active_days" in data
+    assert "total_actions" in data
+    # One submit = one attempt per exercise, all on today (UTC).
+    assert data["total_actions"] == sum(d["count"] for d in data["days"])
+    assert data["total_actions"] > 0
+    assert data["total_active_days"] == len(data["days"]) == 1
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert data["days"][0]["date"] == today
+    assert data["days"][0]["count"] == data["total_actions"]
+
+
+def test_activity_days_param_out_of_range_still_200(client, sample_course, learner_headers):
+    _submit(client, sample_course, sample_course["correct_answers"], learner_headers)
+    for query in ("?days=1", "?days=10000", "?days=7", "?days=182"):
+        resp = client.get(f"/api/progress/activity{query}", headers=learner_headers)
+        assert resp.status_code == 200
+        assert resp.get_json()["data"]["total_actions"] > 0
