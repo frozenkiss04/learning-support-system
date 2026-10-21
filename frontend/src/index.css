@@ -85,3 +85,176 @@
     overflow: hidden;
   }
 }
+
+/* ==========================================================================
+   LSS motion utilities (tiền tố lss- để không đụng Tailwind)
+   Chỉ dùng màu slate/green/amber phẳng — không gradient trang trí, không glass.
+   ========================================================================== */
+
+@keyframes lss-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lss-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Quét sáng cho skeleton: nền slate-200, dải sáng slate-100 chạy qua */
+@keyframes lss-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Mảnh confetti rơi từ trên xuống, trôi ngang + xoay theo biến inline */
+@keyframes lss-confetti-fall {
+  0% {
+    transform: translate3d(0, -4vh, 0) rotate(0deg);
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(var(--lss-drift, 0px), 104vh, 0)
+      rotate(var(--lss-spin, 540deg));
+    opacity: 0;
+  }
+}
+
+/* Lắc nhẹ cho biểu tượng chuỗi ngày học (streak) */
+@keyframes lss-wiggle {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-6deg);
+  }
+  75% {
+    transform: rotate(6deg);
+  }
+}
+
+.lss-fade-up {
+  animation: lss-fade-up 0.5s ease-out both;
+}
+
+.lss-pop-in {
+  animation: lss-pop-in 0.25s ease-out both;
+}
+
+.lss-shimmer {
+  background-color: #e2e8f0; /* slate-200 */
+  background-image: linear-gradient(
+    100deg,
+    rgba(226, 232, 240, 0) 40%,
+    rgba(248, 250, 252, 0.9) 50%,
+    rgba(226, 232, 240, 0) 60%
+  );
+  background-size: 200% 100%;
+  animation: lss-shimmer 1.4s linear infinite;
+}
+
+.lss-confetti-piece {
+  position: absolute;
+  top: 0;
+  will-change: transform, opacity;
+  animation-name: lss-confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+.lss-wiggle {
+  transform-origin: 50% 85%;
+  animation: lss-wiggle 2.4s ease-in-out infinite;
+}
+
+/* --- So le cho trang lộ trình ------------------------------------------------
+   Gắn .lss-stagger vào container các chương: từng section chương fade-up so le,
+   các hàng bài học (con trực tiếp của .divide-y trong UnitSection) cũng vậy. */
+.lss-stagger > * {
+  animation: lss-fade-up 0.5s ease-out both;
+}
+.lss-stagger > *:nth-child(2) {
+  animation-delay: 90ms;
+}
+.lss-stagger > *:nth-child(3) {
+  animation-delay: 180ms;
+}
+.lss-stagger > *:nth-child(4) {
+  animation-delay: 270ms;
+}
+.lss-stagger > *:nth-child(n + 5) {
+  animation-delay: 360ms;
+}
+
+.lss-stagger .divide-y > * {
+  animation: lss-fade-up 0.45s ease-out both;
+}
+.lss-stagger .divide-y > *:nth-child(2) {
+  animation-delay: 45ms;
+}
+.lss-stagger .divide-y > *:nth-child(3) {
+  animation-delay: 90ms;
+}
+.lss-stagger .divide-y > *:nth-child(4) {
+  animation-delay: 135ms;
+}
+.lss-stagger .divide-y > *:nth-child(5) {
+  animation-delay: 180ms;
+}
+.lss-stagger .divide-y > *:nth-child(6) {
+  animation-delay: 225ms;
+}
+.lss-stagger .divide-y > *:nth-child(n + 7) {
+  animation-delay: 270ms;
+}
+
+/* --- Phản hồi nhấn cho phương án chọn đáp án trong khu vực làm bài ----------
+   Options của MultipleChoice/FillBlank/Translate đều là <button> nằm trong
+   section.lss-exercise-area của LessonPage. */
+.lss-exercise-area button:not(:disabled) {
+  transition:
+    transform 120ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+.lss-exercise-area button:not(:disabled):active {
+  transform: scale(0.99);
+}
+
+/* Tôn trọng người dùng giảm chuyển động: tắt toàn bộ animation lss- */
+@media (prefers-reduced-motion: reduce) {
+  .lss-fade-up,
+  .lss-pop-in,
+  .lss-shimmer,
+  .lss-confetti-piece,
+  .lss-wiggle,
+  .lss-stagger > *,
+  .lss-stagger .divide-y > * {
+    animation: none !important;
+  }
+  .lss-exercise-area button:not(:disabled):active {
+    transform: none;
+  }
+}

@@ -52,7 +52,7 @@ export const Button = forwardRef(function Button(
       aria-disabled={isDisabled || undefined}
       aria-busy={loading || undefined}
       className={cn(
-        'inline-flex shrink-0 select-none items-center justify-center whitespace-nowrap rounded-md font-medium shadow-sm transition-colors',
+        'inline-flex shrink-0 select-none items-center justify-center whitespace-nowrap rounded-md font-medium shadow-sm transition active:scale-[0.98]',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-700 focus-visible:ring-offset-2',
         'disabled:pointer-events-none disabled:opacity-50',
         variants[variant] ?? variants.primary,

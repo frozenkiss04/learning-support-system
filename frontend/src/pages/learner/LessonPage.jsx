@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -10,6 +10,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { apiGet, apiPost } from "../../lib/api";
+import * as sounds from "../../lib/sounds";
+import { useCountUp } from "../../hooks/useCountUp";
 import ExerciseRunner from "../../components/exercise/ExerciseRunner";
 import ResultPanel from "../../components/exercise/ResultPanel";
 
@@ -48,6 +50,15 @@ export default function LessonPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [result, setResult] = useState(null);
+  const [celebrate, setCelebrate] = useState(false);
+  const celebrateTimerRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (celebrateTimerRef.current) window.clearTimeout(celebrateTimerRef.current);
+    },
+    [],
+  );
 
   const loadLesson = useCallback(async () => {
     setLoading(true);
@@ -98,6 +109,22 @@ export default function LessonPage() {
     try {
       const data = await apiPost(`/api/lessons/${lessonId}/submit`, { answers });
       setResult(data ?? null);
+      // Âm thanh phản hồi theo kết quả chấm (details từng câu từ BE):
+      // đạt bài -> complete(); có câu đúng -> correct(); sai toàn bộ -> wrong().
+      const details = data?.details ?? [];
+      const correctCount = details.filter((d) => d.is_correct).length;
+      if (data?.passed) {
+        sounds.complete();
+        setCelebrate(true);
+        if (celebrateTimerRef.current) window.clearTimeout(celebrateTimerRef.current);
+        celebrateTimerRef.current = window.setTimeout(() => setCelebrate(false), 2600);
+      } else if (details.length > 0 && correctCount === details.length) {
+        sounds.complete();
+      } else if (correctCount > 0) {
+        sounds.correct();
+      } else if (details.length > 0) {
+        sounds.wrong();
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       setSubmitError(
@@ -112,6 +139,8 @@ export default function LessonPage() {
     setResult(null);
     setAnswers({});
     setSubmitError("");
+    setCelebrate(false);
+    if (celebrateTimerRef.current) window.clearTimeout(celebrateTimerRef.current);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -198,16 +227,22 @@ export default function LessonPage() {
                   onBack={backToPath}
                 />
               ) : result ? (
-                <ResultPanel
-                  result={result}
-                  exercises={exercises}
-                  answers={answers}
-                  onNext={goNext}
-                  onBackToPath={backToPath}
-                  onRetry={handleRetry}
-                />
+                <>
+                  {result.passed && celebrate && <ConfettiBurst />}
+                  {result.passed && (
+                    <CelebrationBanner xp={result.xp_earned ?? 0} correct={result.correct} total={result.total} />
+                  )}
+                  <ResultPanel
+                    result={result}
+                    exercises={exercises}
+                    answers={answers}
+                    onNext={goNext}
+                    onBackToPath={backToPath}
+                    onRetry={handleRetry}
+                  />
+                </>
               ) : (
-                <section className="rounded-lg border border-slate-200 bg-white p-6">
+                <section className="lss-exercise-area rounded-lg border border-slate-200 bg-white p-6">
                   <ExerciseRunner
                     exercises={exercises}
                     answers={answers}
@@ -271,14 +306,92 @@ function AiPanelPlaceholder() {
   );
 }
 
+/**
+ * Màn confetti ăn mừng khi đạt bài: ~24 mảnh div rơi bằng CSS thuần
+ * (animation lss-confetti-fall trong index.css), màu trong palette
+ * green/amber/slate. Component cha chỉ mount trong ~2.6s rồi gỡ;
+ * mỗi mảnh cũng tự mờ dần ở cuối vòng rơi. Không chặn thao tác (pointer-events-none).
+ */
+const CONFETTI_COLORS = ["#15803d", "#16a34a", "#22c55e", "#f59e0b", "#fbbf24", "#94a3b8", "#64748b"];
+
+function ConfettiBurst() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 24 }, (_, i) => {
+        // Giả ngẫu nhiên tất định theo index để render ổn định giữa các lần mount.
+        const rand = (seed) => {
+          const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+          return x - Math.floor(x);
+        };
+        return {
+          id: i,
+          left: `${(rand(1) * 100).toFixed(2)}%`,
+          width: 6 + Math.round(rand(2) * 5),
+          height: 8 + Math.round(rand(3) * 7),
+          backgroundColor: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+          borderRadius: i % 4 === 0 ? "50%" : "2px",
+          animationDuration: `${(1.9 + rand(4) * 0.8).toFixed(2)}s`,
+          animationDelay: `${(rand(5) * 0.35).toFixed(2)}s`,
+          drift: `${Math.round((rand(6) - 0.5) * 160)}px`,
+          spin: `${Math.round(360 + rand(7) * 540)}deg`,
+        };
+      }),
+    [],
+  );
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden" aria-hidden="true">
+      {pieces.map((p) => (
+        <span
+          key={p.id}
+          className="lss-confetti-piece"
+          style={{
+            left: p.left,
+            width: p.width,
+            height: p.height,
+            backgroundColor: p.backgroundColor,
+            borderRadius: p.borderRadius,
+            animationDuration: p.animationDuration,
+            animationDelay: p.animationDelay,
+            "--lss-drift": p.drift,
+            "--lss-spin": p.spin,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Dải chúc mừng phía trên ResultPanel khi đạt bài: XP nhận được đếm tăng
+ * bằng useCountUp. Chỉ render khi result.passed.
+ */
+function CelebrationBanner({ xp, correct, total }) {
+  const xpDisplay = useCountUp(xp);
+  return (
+    <div className="lss-pop-in mb-6 flex items-center gap-3 rounded-lg border border-green-700/30 bg-green-50 px-5 py-4">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-green-700 text-white">
+        <Award className="h-5 w-5" aria-hidden="true" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-green-900">Chúc mừng, bạn đã hoàn thành bài học!</p>
+        <p className="mt-0.5 text-sm text-green-800">
+          Đúng {correct}/{total} câu · Bạn nhận được{" "}
+          <span className="font-semibold tabular-nums">+{xpDisplay} XP</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function LessonSkeleton() {
   return (
-    <div className="animate-pulse" aria-label="Đang tải bài học">
-      <div className="h-8 w-2/3 rounded bg-slate-200" />
-      <div className="mt-3 h-4 w-1/2 rounded bg-slate-200" />
+    <div aria-label="Đang tải bài học">
+      <div className="lss-shimmer h-8 w-2/3 rounded" />
+      <div className="lss-shimmer mt-3 h-4 w-1/2 rounded" />
       <div className="mt-8 rounded-lg border border-slate-200 bg-white p-6">
-        <div className="h-4 w-24 rounded bg-slate-200" />
-        <div className="mt-5 h-6 w-3/4 rounded bg-slate-200" />
+        <div className="lss-shimmer h-4 w-24 rounded" />
+        <div className="lss-shimmer mt-5 h-6 w-3/4 rounded" />
         <div className="mt-6 space-y-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="h-12 rounded-md border border-slate-200 bg-slate-50" />

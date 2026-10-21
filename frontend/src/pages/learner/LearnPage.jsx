@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, BookOpen, ClipboardList, Play } from 'lucide-react';
+import { AlertCircle, BookOpen, ClipboardList, Play, Volume2, VolumeX } from 'lucide-react';
 
 import { apiGet } from '../../lib/api';
+import { useCountUp } from '../../hooks/useCountUp';
+import * as sounds from '../../lib/sounds';
 import CoursePicker from '../../components/learning/CoursePicker';
 import UnitSection from '../../components/learning/UnitSection';
 import LearnSkeleton from '../../components/learning/LearnSkeleton';
@@ -22,6 +24,21 @@ import LearnEmptyState from '../../components/learning/LearnEmptyState';
 export default function LearnPage() {
   const navigate = useNavigate();
   const [selectedCourseId, setSelectedCourseId] = useState(null);
+  // Thanh tiến độ header: render ở 0% trước, mount xong mới chạy tới giá trị thật.
+  const [barReady, setBarReady] = useState(false);
+  const [soundOn, setSoundOn] = useState(() => sounds.isEnabled());
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBarReady(true), 60);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const toggleSound = () => {
+    const next = !soundOn;
+    sounds.setEnabled(next);
+    setSoundOn(next);
+    if (next) sounds.correct(); // tiếng xác nhận nhẹ khi bật lại
+  };
 
   const coursesQuery = useQuery({
     queryKey: ['courses'],
@@ -54,6 +71,7 @@ export default function LearnPage() {
   const nextLesson = flatLessons.find(
     (l) => l.status !== 'COMPLETED' && l.status !== 'LOCKED',
   );
+  const earnedXpDisplay = useCountUp(earnedXp);
 
   const openLesson = (lesson) => navigate(`/lessons/${lesson.id}`);
 
@@ -141,16 +159,32 @@ export default function LearnPage() {
               <span>
                 {units.length} chương · {totalLessons} bài học
               </span>
-              {earnedXp > 0 && <span>· Đã nhận {earnedXp} XP</span>}
+              {earnedXp > 0 && <span>· Đã nhận {earnedXpDisplay} XP</span>}
             </div>
           </div>
 
           <div className="flex shrink-0 flex-col items-stretch gap-3 sm:items-end">
-            <CoursePicker
-              courses={courses}
-              value={courseId}
-              onChange={setSelectedCourseId}
-            />
+            <div className="flex items-center gap-2">
+              <CoursePicker
+                courses={courses}
+                value={courseId}
+                onChange={setSelectedCourseId}
+              />
+              <button
+                type="button"
+                onClick={toggleSound}
+                aria-pressed={soundOn}
+                aria-label={soundOn ? 'Tắt âm thanh phản hồi' : 'Bật âm thanh phản hồi'}
+                title={soundOn ? 'Tắt âm thanh phản hồi' : 'Bật âm thanh phản hồi'}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2"
+              >
+                {soundOn ? (
+                  <Volume2 className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <VolumeX className="h-4 w-4" aria-hidden="true" />
+                )}
+              </button>
+            </div>
             {nextLesson && (
               <button
                 type="button"
@@ -183,8 +217,8 @@ export default function LearnPage() {
             aria-label="Tiến độ khóa học"
           >
             <div
-              className="h-full bg-green-700 transition-all"
-              style={{ width: `${coursePercent}%` }}
+              className="h-full bg-green-700 transition-[width] duration-700 ease-out"
+              style={{ width: `${barReady ? coursePercent : 0}%` }}
             />
           </div>
         </div>
@@ -219,7 +253,7 @@ export default function LearnPage() {
         )}
 
         {pathQuery.isSuccess && units.length > 0 && (
-          <div className="space-y-6">
+          <div className="lss-stagger space-y-6">
             {units.map((unit, i) => (
               <UnitSection
                 key={unit.id}
