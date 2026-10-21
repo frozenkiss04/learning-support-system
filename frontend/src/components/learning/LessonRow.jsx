@@ -96,6 +96,13 @@ export default function LessonRow({ lesson, index, onOpen }) {
     <button
       type="button"
       onClick={() => onOpen?.(lesson)}
+      onMouseEnter={() => {
+        // Prefetch the lesson page chunk on hover so opening a lesson feels instant.
+        import('../../pages/learner/LessonPage.jsx').catch(() => {});
+      }}
+      onFocus={() => {
+        import('../../pages/learner/LessonPage.jsx').catch(() => {});
+      }}
       className={
         rowClass +
         'transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-inset'

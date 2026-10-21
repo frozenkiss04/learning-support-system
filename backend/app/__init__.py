@@ -19,6 +19,12 @@ def create_app(config_object=Config):
     )
     limiter.init_app(app)
 
+    # Gzip JSON responses (course lists / leaderboards shrink ~70%),
+    # which noticeably speeds up first paint on slow connections.
+    from flask_compress import Compress
+
+    Compress(app)
+
     from .models import chat, course, learning, review, user  # noqa: F401  (register models)
 
     from .blueprints.admin import admin_bp

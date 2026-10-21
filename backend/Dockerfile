@@ -1,17 +1,25 @@
+# syntax=docker/dockerfile:1
 # Backend image — dùng khi deploy Render dạng Docker (root directory: backend).
 # Đường deploy chính của repo là render.yaml (Python native) ở root repo;
 # Dockerfile này là phương án thay thế tương đương, cùng lệnh gunicorn.
+#
+# Tối ưu tốc độ build:
+# - Layer requirements tách riêng: chỉ cài lại thư viện khi requirements.txt đổi,
+#   các lần build sửa code chỉ tốn vài giây ở layer COPY code.
+# - BuildKit cache mount cho pip: wheel đã tải được giữ lại giữa các lần build
+#   (kể cả khi requirements đổi ít), không tải lại toàn bộ từ PyPI.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     WEB_CONCURRENCY=2
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY . .
 
