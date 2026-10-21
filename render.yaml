@@ -21,6 +21,7 @@
 services:
   - type: web
     name: learning-support-api
+    region: singapore # gần người dùng VN + cùng region với Neon (ap-southeast-1) để giảm độ trễ API
     runtime: python
     rootDir: backend
     plan: free
