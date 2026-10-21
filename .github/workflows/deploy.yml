@@ -3,6 +3,8 @@ name: CD — Deploy Render + Vercel
 # Runs after CI passes on main, or manually from the Actions tab.
 # Each job no-ops with a clear notice when its secrets are not configured yet,
 # so this workflow is safe to keep in the repo before the platforms are connected.
+# NOTE: GitHub does not allow the `secrets` context inside `if:` conditions,
+# so secrets are mapped to job env first and steps check `env.*` instead.
 on:
   workflow_run:
     workflows: [CI]
@@ -19,9 +21,11 @@ jobs:
     name: Deploy backend — Render
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
     steps:
       - name: Notice when Render is not connected yet
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL == '' }}
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL == '' }}
         run: |
           echo "::notice::RENDER_DEPLOY_HOOK_URL chua duoc cau hinh trong GitHub Secrets."
           echo "Tao service tren Render (New > Blueprint, chon repo nay) roi lay Deploy Hook:"
@@ -29,8 +33,8 @@ jobs:
           echo "Them vao GitHub: Settings > Secrets and variables > Actions > RENDER_DEPLOY_HOOK_URL"
 
       - name: Trigger Render deploy hook
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
 
   deploy-frontend:
     name: Deploy frontend — Vercel
@@ -39,28 +43,29 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - name: Notice when Vercel is not connected yet
-        if: ${{ secrets.VERCEL_TOKEN == '' }}
+        if: ${{ env.VERCEL_TOKEN == '' }}
+        working-directory: .
         run: |
           echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID chua duoc cau hinh."
           echo "Import repo tren Vercel (Root Directory = frontend, env VITE_API_URL = URL Render),"
           echo "sau do them 3 secrets tren vao GitHub de CD tu dong deploy moi lan push main."
 
       - uses: actions/checkout@v4
-        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        if: ${{ env.VERCEL_TOKEN != '' }}
 
       - uses: actions/setup-node@v4
-        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        if: ${{ env.VERCEL_TOKEN != '' }}
         with:
           node-version: "20"
 
       - name: Deploy to Vercel (production)
-        if: ${{ secrets.VERCEL_TOKEN != '' }}
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        if: ${{ env.VERCEL_TOKEN != '' }}
         run: |
           npm install --global vercel@latest
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
