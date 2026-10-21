@@ -1,0 +1,4 @@
+# Procfile chỉ là phương án dự phòng cho các PaaS kiểu Heroku.
+# Deploy chính thức dùng render.yaml (root repo) hoặc Dockerfile (thư mục này) —
+# Render không đọc file này. Lệnh phải khớp startCommand trong render.yaml.
+web: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
