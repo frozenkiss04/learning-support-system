@@ -1,0 +1,68 @@
+name: CD — Deploy Render + Vercel
+
+# Runs after CI passes on main, or manually from the Actions tab.
+# Each job no-ops with a clear notice when its secrets are not configured yet,
+# so this workflow is safe to keep in the repo before the platforms are connected.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-backend:
+    name: Deploy backend — Render
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice when Render is not connected yet
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL == '' }}
+        run: |
+          echo "::notice::RENDER_DEPLOY_HOOK_URL chua duoc cau hinh trong GitHub Secrets."
+          echo "Tao service tren Render (New > Blueprint, chon repo nay) roi lay Deploy Hook:"
+          echo "Render Dashboard > service learning-support-api > Settings > Deploy Hook."
+          echo "Them vao GitHub: Settings > Secrets and variables > Actions > RENDER_DEPLOY_HOOK_URL"
+
+      - name: Trigger Render deploy hook
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
+  deploy-frontend:
+    name: Deploy frontend — Vercel
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Notice when Vercel is not connected yet
+        if: ${{ secrets.VERCEL_TOKEN == '' }}
+        run: |
+          echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID chua duoc cau hinh."
+          echo "Import repo tren Vercel (Root Directory = frontend, env VITE_API_URL = URL Render),"
+          echo "sau do them 3 secrets tren vao GitHub de CD tu dong deploy moi lan push main."
+
+      - uses: actions/checkout@v4
+        if: ${{ secrets.VERCEL_TOKEN != '' }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        with:
+          node-version: "20"
+
+      - name: Deploy to Vercel (production)
+        if: ${{ secrets.VERCEL_TOKEN != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npm install --global vercel@latest
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
