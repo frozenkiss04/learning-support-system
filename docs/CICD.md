@@ -27,6 +27,18 @@ Neon không cần bước deploy trong pipeline: nó là Postgres serverless, ba
 Chưa có secret thì job CD tương ứng chỉ in thông báo hướng dẫn và kết thúc xanh —
 không báo fail, không deploy nhầm.
 
+## Thực tế đã triển khai (2026-10-22)
+
+- **Backend:** Render đã kết nối GitHub và `render.yaml` đặt `autoDeploy: true` nên
+  backend tự deploy mỗi lần push `main` — secret `RENDER_DEPLOY_HOOK_URL` chỉ là dự phòng,
+  hiện **chưa đặt** mà CD backend vẫn hoạt động qua kênh của Render.
+- **Frontend:** đã đặt đủ `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` +
+  repo variable `VITE_API_URL`; job CD deploy production thành công.
+- Hai lỗi đã gặp và đã sửa trong `deploy.yml`:
+  1. `vercel build` trên runner không tự cài dependencies → phải `npm ci` trước (thiếu `vite`).
+  2. Vercel CLI phải chạy từ **gốc repo** vì project đã đặt Root Directory = `frontend`;
+     chạy từ trong `frontend/` sẽ build nhầm vào `frontend/frontend`.
+
 ## Thứ tự kết nối 3 nền tảng lần đầu
 
 1. **Neon** — tạo project → lấy **pooled** connection string (host có `-pooler`).
