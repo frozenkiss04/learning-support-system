@@ -19,4 +19,4 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Curl /health (cold start can take a while)
-        run: curl -fsS --retry 2 --retry-delay 10 --max-time 120 https://learning-support-api.onrender.com/health
+        run: curl -fsS --retry 2 --retry-delay 10 --max-time 120 https://learning-support-api-sg.onrender.com/health
