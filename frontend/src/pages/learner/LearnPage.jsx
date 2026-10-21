@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, BookOpen, ClipboardList, Play } from 'lucide-react';
 
-import api from '../../lib/api';
+import { apiGet } from '../../lib/api';
 import CoursePicker from '../../components/learning/CoursePicker';
 import UnitSection from '../../components/learning/UnitSection';
 import LearnSkeleton from '../../components/learning/LearnSkeleton';
@@ -25,14 +25,14 @@ export default function LearnPage() {
 
   const coursesQuery = useQuery({
     queryKey: ['courses'],
-    queryFn: () => api.get('/api/courses'),
+    queryFn: () => apiGet('/api/courses'),
   });
   const courses = coursesQuery.data ?? [];
   const courseId = selectedCourseId ?? courses[0]?.id ?? null;
 
   const pathQuery = useQuery({
     queryKey: ['course-path', courseId],
-    queryFn: () => api.get(`/api/courses/${courseId}/path`),
+    queryFn: () => apiGet(`/api/courses/${courseId}/path`),
     enabled: courseId != null,
   });
 

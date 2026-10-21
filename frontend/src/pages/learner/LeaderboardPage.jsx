@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Crown, Loader2, Trophy, Users } from "lucide-react";
-import api from "../../lib/api";
+import { apiGet } from "../../lib/api";
 import { useAuthStore } from "../../stores/authStore";
 
 /**
@@ -18,7 +18,7 @@ export default function LeaderboardPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get("/api/leaderboard");
+      const data = await apiGet("/api/leaderboard");
       setEntries(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(

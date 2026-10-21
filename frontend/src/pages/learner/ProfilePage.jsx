@@ -13,7 +13,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import api from "../../lib/api";
+import { apiGet, apiPost } from "../../lib/api";
 import { useAuthStore } from "../../stores/authStore";
 
 const ROLE_LABELS = {
@@ -69,7 +69,7 @@ export default function ProfilePage() {
     setLoading(true);
     setLoadError("");
     try {
-      const data = await api.get("/api/auth/me");
+      const data = await apiGet("/api/auth/me");
       setProfile(data);
       if (typeof setUser === "function") setUser(data);
     } catch (err) {
@@ -122,7 +122,7 @@ export default function ProfilePage() {
     if (!validateForm()) return;
     setSubmitting(true);
     try {
-      await api.post("/api/auth/change-password", {
+      await apiPost("/api/auth/change-password", {
         current_password: form.current_password,
         new_password: form.new_password,
       });
