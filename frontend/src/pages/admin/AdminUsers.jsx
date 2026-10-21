@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Loader2,
   Lock,
   LockOpen,
@@ -47,6 +48,31 @@ function normalizeListResponse(res) {
     total: res?.total ?? res?.meta?.total ?? (Array.isArray(items) ? items.length : 0),
     page: res?.page ?? 1,
   };
+}
+
+function escapeCsvValue(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadCsv(filename, headers, rows) {
+  const lines = [
+    headers.map(escapeCsvValue).join(","),
+    ...rows.map((row) => row.map(escapeCsvValue).join(",")),
+  ];
+  // BOM ở đầu file để Excel đọc đúng tiếng Việt (UTF-8).
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function formatDate(iso) {
@@ -192,6 +218,21 @@ export default function AdminUsers() {
     patchUser(user, { role }, `Đã đổi vai trò của ${user.email} thành ${ROLE_LABEL[role]}.`);
   };
 
+  // Xuất CSV đúng dữ liệu đang có trong state (trang hiện tại, đã lọc theo từ khóa).
+  const handleExportCsv = () => {
+    const headers = ["id", "full_name", "email", "role", "xp", "is_active", "created_at"];
+    const rows = users.map((u) => [
+      u.id,
+      u.full_name ?? "",
+      u.email ?? "",
+      u.role ?? "",
+      u.xp ?? 0,
+      u.is_active ? "true" : "false",
+      u.created_at ?? "",
+    ]);
+    downloadCsv("users.csv", headers, rows);
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-6 py-6">
       {/* Header */}
@@ -202,6 +243,15 @@ export default function AdminUsers() {
             Danh sách tài khoản trong hệ thống. Tổng {total} tài khoản.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={handleExportCsv}
+          disabled={users.length === 0}
+          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          <Download className="h-4 w-4" />
+          Xuất CSV
+        </button>
       </div>
 
       {/* Toolbar */}

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Activity,
   AlertCircle,
   Award,
+  BookOpen,
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
@@ -12,6 +14,8 @@ import {
   Loader2,
   LogOut,
   Mail,
+  Printer,
+  ScrollText,
   ShieldCheck,
   Sprout,
   User,
@@ -45,6 +49,128 @@ function initialsOf(name) {
   return (first + last).toUpperCase();
 }
 
+/** Chuỗi ngày local "YYYY-MM-DD" (không dùng toISOString để tránh lệch UTC). */
+function toLocalDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function heatCellClass(count) {
+  if (!count) return "bg-slate-100";
+  if (count === 1) return "bg-green-200";
+  if (count <= 3) return "bg-green-400";
+  return "bg-[#15803d]";
+}
+
+/**
+ * Dựng lưới heatmap 12 tuần x 7 ngày, kết thúc hôm nay.
+ * Hàng = thứ trong tuần (0 = Thứ 2 ... 6 = Chủ nhật), cột = tuần.
+ * Ô thuộc tương lai được đánh dấu isFuture để render trong suốt.
+ */
+function buildHeatmapWeeks(activity) {
+  const countByDate = new Map();
+  for (const item of activity?.days ?? []) {
+    if (item?.date) countByDate.set(item.date, Number(item.count) || 0);
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIndex = (today.getDay() + 6) % 7; // Thứ 2 = 0
+  const start = new Date(today);
+  start.setDate(today.getDate() - (11 * 7 + todayIndex));
+
+  const weeks = [];
+  for (let w = 0; w < 12; w += 1) {
+    const column = [];
+    for (let d = 0; d < 7; d += 1) {
+      const date = new Date(start);
+      date.setDate(start.getDate() + w * 7 + d);
+      const dateStr = toLocalDateString(date);
+      column.push({
+        dateStr,
+        count: countByDate.get(dateStr) ?? 0,
+        isFuture: date > today,
+        label: `${String(date.getDate()).padStart(2, "0")}/${String(
+          date.getMonth() + 1
+        ).padStart(2, "0")}`,
+      });
+    }
+    weeks.push(column);
+  }
+  return weeks;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Mở cửa sổ in chứng chỉ với HTML tự chứa (không phụ thuộc tài nguyên ngoài). */
+function openCertificatePrint({ courseTitle, learnerName, dateText }) {
+  const win = window.open("", "_blank", "width=900,height=640");
+  if (!win) return;
+  const safeCourse = escapeHtml(courseTitle);
+  const safeName = escapeHtml(learnerName);
+  const safeDate = escapeHtml(dateText);
+  win.document.write(`<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Chứng chỉ hoàn thành — ${safeCourse}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, "Times New Roman", serif; background: #f1f5f9; padding: 32px; }
+  .cert { background: #ffffff; max-width: 820px; margin: 0 auto; border: 3px solid #15803d; padding: 10px; }
+  .inner { border: 1px solid #15803d; padding: 48px 56px; text-align: center; }
+  .brand { font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: 4px; color: #15803d; text-transform: uppercase; }
+  .brand-sub { font-family: Arial, Helvetica, sans-serif; font-size: 11px; letter-spacing: 2px; color: #64748b; margin-top: 4px; text-transform: uppercase; }
+  h1 { font-size: 34px; letter-spacing: 3px; color: #0f172a; margin-top: 36px; text-transform: uppercase; }
+  .rule { width: 120px; height: 2px; background: #15803d; margin: 20px auto; }
+  .lead { font-size: 15px; color: #475569; font-style: italic; }
+  .name { font-size: 32px; font-weight: 700; color: #0f172a; margin-top: 14px; }
+  .course { font-size: 22px; font-weight: 700; color: #15803d; margin-top: 10px; }
+  .date { font-size: 14px; color: #475569; margin-top: 28px; }
+  .footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 48px; }
+  .footer .cell { width: 220px; text-align: center; }
+  .sign { font-family: "Segoe Script", "Brush Script MT", cursive; font-size: 26px; color: #0f172a; }
+  .sign-line { border-top: 1px solid #94a3b8; margin-top: 6px; padding-top: 6px; font-family: Arial, Helvetica, sans-serif; font-size: 11px; letter-spacing: 1px; color: #64748b; text-transform: uppercase; }
+  .seal { width: 84px; height: 84px; border: 2px solid #15803d; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; color: #15803d; font-family: Arial, Helvetica, sans-serif; font-weight: 700; font-size: 11px; letter-spacing: 1px; }
+  @media print { body { background: #ffffff; padding: 0; } .cert { border-width: 3px; } }
+</style>
+</head>
+<body>
+  <div class="cert">
+    <div class="inner">
+      <div class="brand">LearnHub</div>
+      <div class="brand-sub">Hệ thống hỗ trợ học tập trực tuyến</div>
+      <h1>Chứng chỉ hoàn thành</h1>
+      <div class="rule"></div>
+      <p class="lead">Chứng nhận học viên</p>
+      <p class="name">${safeName}</p>
+      <p class="lead" style="margin-top: 18px;">đã hoàn thành toàn bộ chương trình của khóa học</p>
+      <p class="course">${safeCourse}</p>
+      <p class="date">Ngày cấp: ${safeDate}</p>
+      <div class="footer">
+        <div class="cell"><div class="seal">LearnHub</div></div>
+        <div class="cell">
+          <div class="sign">LearnHub</div>
+          <div class="sign-line">Ban quản trị LearnHub</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>window.onload = function () { window.print(); };</script>
+</body>
+</html>`);
+  win.document.close();
+  win.focus();
+}
+
 /**
  * Hồ sơ cá nhân.
  * API: GET  /api/auth/me
@@ -57,6 +183,8 @@ export default function ProfilePage() {
 
   const [profile, setProfile] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [activity, setActivity] = useState(null);
+  const [courseProgress, setCourseProgress] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -106,6 +234,64 @@ export default function ProfilePage() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary]);
+
+  // Heatmap hoạt động: GET /api/progress/activity?days=84.
+  // Lỗi tải thì giữ null để ẩn hẳn mục (không làm vỡ trang).
+  const loadActivity = useCallback(async () => {
+    try {
+      const data = await apiGet("/api/progress/activity?days=84");
+      setActivity(data);
+    } catch {
+      setActivity(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActivity();
+  }, [loadActivity]);
+
+  // Tiến độ từng khóa cho mục chứng chỉ: GET /api/courses rồi
+  // GET /api/courses/:id/path để đếm bài COMPLETED trên tổng số bài.
+  const loadCourseProgress = useCallback(async () => {
+    try {
+      const courses = await apiGet("/api/courses");
+      const list = Array.isArray(courses) ? courses : courses?.courses ?? [];
+      const results = await Promise.allSettled(
+        list.map((course) => apiGet(`/api/courses/${course.id}/path`))
+      );
+      const progress = list.map((course, index) => {
+        const settled = results[index];
+        const units =
+          settled.status === "fulfilled" ? settled.value?.units ?? [] : [];
+        const lessons = units.flatMap((unit) => unit.lessons ?? []);
+        const completedLessons = lessons.filter(
+          (lesson) => lesson.status === "COMPLETED"
+        );
+        // Ngày hoàn thành: lấy completed_at muộn nhất nếu API có trả,
+        // không có thì để null (hiển thị ngày hôm nay khi cấp chứng chỉ).
+        const completedDates = completedLessons
+          .map((lesson) => lesson.completed_at)
+          .filter(Boolean)
+          .sort();
+        return {
+          id: course.id,
+          title: course.title || "Khóa học",
+          total: lessons.length,
+          completed: completedLessons.length,
+          completedAt: completedDates.length
+            ? completedDates[completedDates.length - 1]
+            : null,
+        };
+      });
+      setCourseProgress(progress);
+    } catch {
+      setCourseProgress(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCourseProgress();
+  }, [loadCourseProgress]);
 
   const handleFormChange = (event) => {
     const { name, value } = event.target;
@@ -232,6 +418,34 @@ export default function ProfilePage() {
   ];
   const achievedCount = badges.filter((badge) => badge.achieved).length;
 
+  // Heatmap hoạt động học tập (12 tuần gần nhất, kết thúc hôm nay).
+  const heatmapWeeks = activity ? buildHeatmapWeeks(activity) : null;
+  const activityActiveDays = activity
+    ? Number(
+        activity.total_active_days ??
+          (activity.days ?? []).filter((d) => (Number(d.count) || 0) > 0)
+            .length
+      )
+    : 0;
+  const activityTotalActions = activity
+    ? Number(
+        activity.total_actions ??
+          (activity.days ?? []).reduce(
+            (sum, d) => sum + (Number(d.count) || 0),
+            0
+          )
+      )
+    : 0;
+
+  // Chứng chỉ: khóa học hoàn thành khi mọi bài trong path đều COMPLETED.
+  const certificates = (courseProgress ?? []).filter(
+    (course) => course.total > 0 && course.completed === course.total
+  );
+  const nearestCourse =
+    (courseProgress ?? [])
+      .filter((course) => course.total > 0 && course.completed < course.total)
+      .sort((a, b) => b.completed / b.total - a.completed / a.total)[0] ?? null;
+
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
       {/* Header trang */}
@@ -353,6 +567,69 @@ export default function ProfilePage() {
             </div>
           </section>
 
+          {/* Hoạt động học tập (heatmap 12 tuần) */}
+          {heatmapWeeks && (
+            <section className="rounded-lg border border-slate-200 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-6 py-4">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Activity
+                    className="h-4 w-4 text-slate-500"
+                    aria-hidden="true"
+                  />
+                  Hoạt động học tập
+                </h2>
+                <span className="text-xs font-medium text-slate-500">
+                  {activityActiveDays.toLocaleString("vi-VN")} ngày đã học ·{" "}
+                  {activityTotalActions.toLocaleString("vi-VN")} lượt học trong
+                  12 tuần
+                </span>
+              </div>
+              <div className="px-6 py-5">
+                <div className="flex gap-[3px]" role="img" aria-label="Bản đồ nhiệt hoạt động học tập 12 tuần gần nhất">
+                  {/* Nhãn thứ: T2 / T4 / T6 / CN */}
+                  <div className="mr-1 flex flex-col gap-[3px]">
+                    {["T2", "", "T4", "", "T6", "", "CN"].map((label, i) => (
+                      <span
+                        key={i}
+                        className="flex h-3 items-center text-[9px] leading-none text-slate-400"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  {heatmapWeeks.map((week, weekIndex) => (
+                    <div key={weekIndex} className="flex flex-col gap-[3px]">
+                      {week.map((cell) =>
+                        cell.isFuture ? (
+                          <span
+                            key={cell.dateStr}
+                            className="h-3 w-3 rounded-[2px] bg-transparent"
+                          />
+                        ) : (
+                          <span
+                            key={cell.dateStr}
+                            title={`${cell.label}: ${cell.count} lượt học`}
+                            className={`h-3 w-3 rounded-[2px] ${heatCellClass(
+                              cell.count
+                            )}`}
+                          />
+                        )
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-500">
+                  <span>Ít</span>
+                  <span className="h-3 w-3 rounded-[2px] bg-slate-100" />
+                  <span className="h-3 w-3 rounded-[2px] bg-green-200" />
+                  <span className="h-3 w-3 rounded-[2px] bg-green-400" />
+                  <span className="h-3 w-3 rounded-[2px] bg-[#15803d]" />
+                  <span>Nhiều</span>
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* Huy hiệu thành tích */}
           <section className="rounded-lg border border-slate-200 bg-white">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
@@ -409,6 +686,131 @@ export default function ProfilePage() {
               })}
             </div>
           </section>
+
+          {/* Chứng chỉ của bạn */}
+          {courseProgress && (
+            <section className="rounded-lg border border-slate-200 bg-white">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <ScrollText
+                    className="h-4 w-4 text-slate-500"
+                    aria-hidden="true"
+                  />
+                  Chứng chỉ của bạn
+                </h2>
+                <span className="text-xs font-medium text-slate-500">
+                  {certificates.length} chứng chỉ
+                </span>
+              </div>
+              <div className="px-6 py-5">
+                {certificates.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {certificates.map((cert) => {
+                      const dateText = formatDate(
+                        cert.completedAt || new Date()
+                      );
+                      return (
+                        <div
+                          key={cert.id}
+                          className="rounded-lg border-2 border-double border-green-700 bg-green-50/40 px-5 py-4"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span
+                              className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-green-700 ring-1 ring-green-200"
+                              aria-hidden="true"
+                            >
+                              <ScrollText className="h-5 w-5" />
+                            </span>
+                            <span className="text-[11px] font-semibold uppercase tracking-widest text-green-700">
+                              LearnHub
+                            </span>
+                          </div>
+                          <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                            Chứng chỉ hoàn thành
+                          </p>
+                          <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                            {cert.title}
+                          </p>
+                          <p className="mt-2 text-sm text-slate-600">
+                            Học viên:{" "}
+                            <span className="font-medium text-slate-900">
+                              {profile.full_name}
+                            </span>
+                          </p>
+                          <p className="mt-0.5 text-sm text-slate-600">
+                            Ngày hoàn thành: {dateText}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openCertificatePrint({
+                                courseTitle: cert.title,
+                                learnerName: profile.full_name,
+                                dateText,
+                              })
+                            }
+                            className="mt-4 inline-flex items-center gap-2 rounded-md bg-green-700 px-3.5 py-2 text-sm font-medium text-white hover:bg-green-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2"
+                          >
+                            <Printer className="h-4 w-4" aria-hidden="true" />
+                            In chứng chỉ
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div>
+                    <p className="flex items-start gap-2 text-sm text-slate-600">
+                      <BookOpen
+                        className="mt-0.5 h-4 w-4 shrink-0 text-slate-400"
+                        aria-hidden="true"
+                      />
+                      Hoàn thành toàn bộ bài trong một khóa học để nhận chứng
+                      chỉ.
+                    </p>
+                    {nearestCourse && (
+                      <div className="mt-4 max-w-md">
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span className="font-medium text-slate-900">
+                            {nearestCourse.title}
+                          </span>
+                          <span className="tabular-nums text-slate-500">
+                            {nearestCourse.completed}/{nearestCourse.total} bài
+                          </span>
+                        </div>
+                        <div
+                          className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100"
+                          role="progressbar"
+                          aria-valuenow={nearestCourse.completed}
+                          aria-valuemin={0}
+                          aria-valuemax={nearestCourse.total}
+                        >
+                          <div
+                            className="h-full rounded-full bg-[#15803d]"
+                            style={{
+                              width: `${
+                                nearestCourse.total
+                                  ? Math.round(
+                                      (nearestCourse.completed /
+                                        nearestCourse.total) *
+                                        100
+                                    )
+                                  : 0
+                              }%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1.5 text-xs text-slate-500">
+                          Còn {nearestCourse.total - nearestCourse.completed}{" "}
+                          bài nữa để nhận chứng chỉ khóa này.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* Đổi mật khẩu */}
           <section className="rounded-lg border border-slate-200 bg-white">

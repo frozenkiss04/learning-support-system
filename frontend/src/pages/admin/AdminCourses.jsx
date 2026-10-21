@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Download,
   ListTree,
   Loader2,
   Pencil,
@@ -122,6 +123,31 @@ function countOf(course, countKey, arrayKey) {
   return null;
 }
 
+function escapeCsvValue(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadCsv(filename, headers, rows) {
+  const lines = [
+    headers.map(escapeCsvValue).join(","),
+    ...rows.map((row) => row.map(escapeCsvValue).join(",")),
+  ];
+  // BOM ở đầu file để Excel đọc đúng tiếng Việt (UTF-8).
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* ---------------------------------- Toast --------------------------------- */
 
 function ToastViewport({ toasts, dismiss }) {
@@ -219,6 +245,19 @@ export default function AdminCourses() {
     return pages;
   }, [page, totalPages]);
 
+  // Xuất CSV đúng dữ liệu đang hiển thị trong state (đã lọc theo từ khóa/trạng thái).
+  const handleExportCsv = () => {
+    const headers = ["id", "title", "level", "is_published", "lesson_count"];
+    const rows = courses.map((course) => [
+      course.id,
+      course.title ?? "",
+      course.level ?? "",
+      course.is_published ? "true" : "false",
+      countOf(course, "lesson_count", "lessons") ?? "",
+    ]);
+    downloadCsv("courses.csv", headers, rows);
+  };
+
   const openCreate = () => {
     setEditingCourse(null);
     setDrawerOpen(true);
@@ -238,14 +277,25 @@ export default function AdminCourses() {
             Tạo, chỉnh sửa và xuất bản các khóa học trong hệ thống.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex h-10 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
-        >
-          <Plus className="h-4 w-4" />
-          Tạo khóa học
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={courses.length === 0}
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" />
+            Xuất CSV
+          </button>
+          <button
+            type="button"
+            onClick={openCreate}
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
+          >
+            <Plus className="h-4 w-4" />
+            Tạo khóa học
+          </button>
+        </div>
       </div>
 
       {limitedMode && (

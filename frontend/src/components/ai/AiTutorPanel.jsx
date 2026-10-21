@@ -4,6 +4,14 @@ import { BookOpen, Send } from "lucide-react";
 import ChatMessage from "./ChatMessage";
 import { SUGGESTED_QUESTIONS, useAiChat } from "./useAiChat";
 
+// Chip hỏi nhanh phía trên ô nhập — bấm là gửi luôn qua sendMessage.
+const QUICK_CHIPS = [
+  "Giải thích bài này",
+  "Cho thêm ví dụ",
+  "Ra câu hỏi luyện tập",
+  "Mẹo nhớ lâu",
+];
+
 /**
  * Panel AI Tutor cố định ở cột phải trang bài học.
  *
@@ -120,6 +128,19 @@ export default function AiTutorPanel({ lesson, className = "" }) {
 
       {/* Ô nhập */}
       <form onSubmit={handleSubmit} className="border-t border-slate-200 p-3">
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {QUICK_CHIPS.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              onClick={() => handleSuggestion(chip)}
+              disabled={inputDisabled}
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 transition-colors hover:border-green-700 hover:text-green-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-2">
           <input
             type="text"
