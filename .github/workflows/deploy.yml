@@ -64,8 +64,19 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install dependencies
+        if: ${{ env.VERCEL_TOKEN != '' }}
+        # vercel build does NOT install deps on a local runner — vite would be missing.
+        run: npm ci
+
       - name: Deploy to Vercel (production)
         if: ${{ env.VERCEL_TOKEN != '' }}
+        env:
+          # Public API URL (GitHub repo variable). Process env wins over the
+          # .env.production.local that `vercel pull` writes, so the bundle is
+          # guaranteed to carry the right API base even if the pulled value is
+          # a "[SENSITIVE]" placeholder.
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
         run: |
           npm install --global vercel@latest
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
