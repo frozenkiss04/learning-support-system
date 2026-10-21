@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, BookOpen, ClipboardList, Play, Volume2, VolumeX } from 'lucide-react';
+import { AlertCircle, BookOpen, Check, ClipboardList, Pencil, Play, Search, Target, Volume2, VolumeX } from 'lucide-react';
 
 import { apiGet } from '../../lib/api';
 import { useCountUp } from '../../hooks/useCountUp';
 import * as sounds from '../../lib/sounds';
+import CommandPalette from '../../components/search/CommandPalette';
 import CoursePicker from '../../components/learning/CoursePicker';
 import UnitSection from '../../components/learning/UnitSection';
 import LearnSkeleton from '../../components/learning/LearnSkeleton';
@@ -27,6 +28,26 @@ export default function LearnPage() {
   // Thanh tiến độ header: render ở 0% trước, mount xong mới chạy tới giá trị thật.
   const [barReady, setBarReady] = useState(false);
   const [soundOn, setSoundOn] = useState(() => sounds.isEnabled());
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  /* ----- Mục tiêu XP theo ngày (lưu localStorage) ----- */
+  const GOAL_OPTIONS = [20, 30, 50];
+  const [dailyGoal, setDailyGoal] = useState(() => {
+    try {
+      const stored = Number(window.localStorage.getItem('lss-daily-goal'));
+      return GOAL_OPTIONS.includes(stored) ? stored : 30;
+    } catch {
+      return 30;
+    }
+  });
+  const [editingGoal, setEditingGoal] = useState(false);
+  const todayKey = useMemo(() => {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${now.getFullYear()}-${mm}-${dd}`;
+  }, []);
+  const [xpBaseline, setXpBaseline] = useState(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setBarReady(true), 60);
@@ -52,6 +73,50 @@ export default function LearnPage() {
     queryFn: () => apiGet(`/api/courses/${courseId}/path`),
     enabled: courseId != null,
   });
+
+  // Tổng kết tiến bộ (XP, chuỗi ngày) — dùng cho vòng mục tiêu XP ngày.
+  const summaryQuery = useQuery({
+    queryKey: ['progress-summary'],
+    queryFn: () => apiGet('/api/progress/summary'),
+  });
+  const totalXp = summaryQuery.data?.xp;
+
+  // Baseline ngày: XP tổng ở lần mở trang đầu tiên trong ngày.
+  // XP hôm nay = XP tổng hiện tại - baseline (không âm).
+  useEffect(() => {
+    if (typeof totalXp !== 'number') return;
+    const key = `lss-xp-baseline-${todayKey}`;
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored == null) {
+        window.localStorage.setItem(key, String(totalXp));
+        setXpBaseline(totalXp);
+      } else {
+        const parsed = Number(stored);
+        setXpBaseline(Number.isFinite(parsed) ? parsed : totalXp);
+      }
+    } catch {
+      setXpBaseline(totalXp);
+    }
+  }, [totalXp, todayKey]);
+
+  const todayXp =
+    typeof totalXp === 'number' && xpBaseline != null
+      ? Math.max(0, totalXp - xpBaseline)
+      : 0;
+  const goalPercent =
+    dailyGoal > 0 ? Math.min(100, Math.round((todayXp / dailyGoal) * 100)) : 0;
+  const goalReached = todayXp >= dailyGoal;
+
+  const chooseGoal = (goal) => {
+    setDailyGoal(goal);
+    try {
+      window.localStorage.setItem('lss-daily-goal', String(goal));
+    } catch {
+      /* localStorage không khả dụng — bỏ qua */
+    }
+    setEditingGoal(false);
+  };
 
   const units = useMemo(() => {
     const raw = pathQuery.data?.units ?? [];
@@ -164,7 +229,20 @@ export default function LearnPage() {
           </div>
 
           <div className="flex shrink-0 flex-col items-stretch gap-3 sm:items-end">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                aria-label="Tìm bài học (Ctrl K)"
+                title="Tìm bài học (Ctrl K)"
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2"
+              >
+                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="hidden md:inline">Tìm bài học...</span>
+                <kbd className="hidden shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-500 lg:inline">
+                  Ctrl K
+                </kbd>
+              </button>
               <CoursePicker
                 courses={courses}
                 value={courseId}
@@ -222,6 +300,112 @@ export default function LearnPage() {
             />
           </div>
         </div>
+
+        {/* Mục tiêu XP hôm nay */}
+        {summaryQuery.isSuccess && (
+          <div className="mt-5 flex flex-wrap items-center gap-4 border-t border-slate-100 pt-5">
+            <div className="relative h-14 w-14 shrink-0">
+              <svg
+                viewBox="0 0 56 56"
+                className="h-14 w-14 -rotate-90 text-green-700"
+                role="progressbar"
+                aria-valuenow={todayXp}
+                aria-valuemin={0}
+                aria-valuemax={dailyGoal}
+                aria-label="Mục tiêu XP hôm nay"
+              >
+                <circle
+                  cx="28"
+                  cy="28"
+                  r="24"
+                  fill="none"
+                  strokeWidth="6"
+                  className="stroke-slate-200"
+                />
+                <circle
+                  cx="28"
+                  cy="28"
+                  r="24"
+                  fill="none"
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  stroke="currentColor"
+                  strokeDasharray={2 * Math.PI * 24}
+                  strokeDashoffset={
+                    2 * Math.PI * 24 * (1 - (barReady ? goalPercent : 0) / 100)
+                  }
+                  className="transition-all duration-700 ease-out"
+                />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold tabular-nums text-slate-700">
+                {goalPercent}%
+              </span>
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
+                <Target className="h-4 w-4 shrink-0 text-green-700" aria-hidden="true" />
+                Mục tiêu hôm nay
+              </p>
+              <p className="mt-0.5 text-sm text-slate-600">
+                <span className="font-semibold tabular-nums text-slate-900">
+                  {todayXp}/{dailyGoal} XP
+                </span>{' '}
+                {goalReached
+                  ? '— Tuyệt vời, bạn đã đạt mục tiêu hôm nay!'
+                  : `— Còn ${dailyGoal - todayXp} XP nữa để đạt mục tiêu.`}
+              </p>
+              {typeof summaryQuery.data?.current_streak === 'number' &&
+                summaryQuery.data.current_streak > 0 && (
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Chuỗi học hiện tại: {summaryQuery.data.current_streak} ngày
+                  </p>
+                )}
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
+              {editingGoal ? (
+                <>
+                  {GOAL_OPTIONS.map((goal) => (
+                    <button
+                      key={goal}
+                      type="button"
+                      onClick={() => chooseGoal(goal)}
+                      aria-pressed={goal === dailyGoal}
+                      className={`inline-flex h-9 items-center rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2 ${
+                        goal === dailyGoal
+                          ? 'bg-green-700 text-white hover:bg-green-800'
+                          : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      {goal} XP
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setEditingGoal(false)}
+                    className="inline-flex h-9 items-center rounded-md px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2"
+                  >
+                    Hủy
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setEditingGoal(true)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2"
+                >
+                  {goalReached ? (
+                    <Check className="h-4 w-4 text-green-700" aria-hidden="true" />
+                  ) : (
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  Chỉnh mục tiêu
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Path body */}
@@ -266,6 +450,9 @@ export default function LearnPage() {
           </div>
         )}
       </div>
+
+      {/* Tìm bài học nhanh (Ctrl/Cmd + K) */}
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   );
 }

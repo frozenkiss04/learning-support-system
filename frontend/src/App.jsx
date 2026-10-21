@@ -15,6 +15,7 @@ const RegisterPage = lazy(() => import('./pages/auth/RegisterPage.jsx'))
 const LearnPage = lazy(() => import('./pages/learner/LearnPage.jsx'))
 const LessonPage = lazy(() => import('./pages/learner/LessonPage.jsx'))
 const ReviewPage = lazy(() => import('./pages/learner/ReviewPage.jsx'))
+const ChallengePage = lazy(() => import('./pages/learner/ChallengePage.jsx'))
 const LeaderboardPage = lazy(() => import('./pages/learner/LeaderboardPage.jsx'))
 const ProfilePage = lazy(() => import('./pages/learner/ProfilePage.jsx'))
 
@@ -97,6 +98,14 @@ export default function App() {
           element={
             <Suspense fallback={<PageFallback />}>
               <ReviewPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/challenge"
+          element={
+            <Suspense fallback={<PageFallback />}>
+              <ChallengePage />
             </Suspense>
           }
         />

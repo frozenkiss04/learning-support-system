@@ -1,16 +1,28 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BookOpen, Flame, Layers, LogOut, Trophy, UserRound } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { BookOpen, Flame, Layers, LogOut, Trophy, UserRound, X, Zap } from 'lucide-react'
 
 import Logo from '../components/brand/Logo.jsx'
+import { apiGet } from '../lib/api.js'
 import { readStoredAuth } from '../routes/ProtectedRoute.jsx'
 import { useAuthStore } from '../stores/authStore.js'
 
 const MENU = [
   { to: '/learn', label: 'Học tập', icon: BookOpen },
   { to: '/review', label: 'Ôn tập', icon: Layers },
+  { to: '/challenge', label: 'Thử thách', icon: Zap },
   { to: '/leaderboard', label: 'Bảng xếp hạng', icon: Trophy },
   { to: '/profile', label: 'Hồ sơ', icon: UserRound },
 ]
+
+function DueBadge({ count }) {
+  if (!count || count <= 0) return null
+  return (
+    <span className="ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#15803d] px-1.5 text-[11px] font-semibold leading-none text-white">
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
 
 function navClass({ isActive }) {
   return [
@@ -23,10 +35,34 @@ function navClass({ isActive }) {
 
 export default function LearnerLayout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const storeUser = useAuthStore((s) => s.user)
   const storeLogout = useAuthStore((s) => s.logout)
   const { user: storedUser } = readStoredAuth()
   const user = storeUser ?? storedUser
+
+  // Số thẻ ôn tập đến hạn — nạp khi layout mount và mỗi lần đổi route.
+  // Lỗi API thì im lặng giữ nguyên giá trị cũ (badge/banner tự ẩn khi = 0).
+  const [dueCount, setDueCount] = useState(0)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    apiGet('/api/progress/summary')
+      .then((payload) => {
+        if (cancelled) return
+        const summary =
+          payload && typeof payload === 'object' && 'due_reviews' in payload
+            ? payload
+            : payload?.data
+        const due = Number(summary?.due_reviews ?? 0)
+        if (Number.isFinite(due) && due >= 0) setDueCount(due)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [location.pathname])
 
   const xp = user?.xp ?? 0
   const streak = user?.current_streak ?? 0
@@ -57,6 +93,7 @@ export default function LearnerLayout() {
             <NavLink key={item.to} to={item.to} className={navClass}>
               <item.icon className="shrink-0" size={18} strokeWidth={1.8} />
               {item.label}
+              {item.to === '/review' && <DueBadge count={dueCount} />}
             </NavLink>
           ))}
         </nav>
@@ -120,9 +157,36 @@ export default function LearnerLayout() {
             <NavLink key={item.to} to={item.to} className={navClass}>
               <item.icon size={16} strokeWidth={1.8} />
               {item.label}
+              {item.to === '/review' && <DueBadge count={dueCount} />}
             </NavLink>
           ))}
         </nav>
+
+        {/* Banner nhắc ôn tập khi có nhiều thẻ đến hạn */}
+        {dueCount >= 5 && !bannerDismissed && (
+          <div className="border-b border-green-200 bg-green-50 px-4 py-2 md:px-6">
+            <div className="mx-auto flex w-full max-w-6xl items-center gap-2 text-sm text-green-900">
+              <Layers size={16} strokeWidth={1.8} className="shrink-0 text-green-700" />
+              <span className="min-w-0 flex-1 truncate">
+                Bạn có {dueCount} thẻ đến hạn ôn tập
+              </span>
+              <Link
+                to="/review"
+                className="shrink-0 font-medium text-green-800 underline decoration-green-300 underline-offset-2 hover:text-green-900"
+              >
+                Ôn ngay
+              </Link>
+              <button
+                type="button"
+                onClick={() => setBannerDismissed(true)}
+                className="shrink-0 rounded-md p-1 text-green-700 hover:bg-green-100 hover:text-green-900"
+                aria-label="Đóng nhắc ôn tập"
+              >
+                <X size={16} strokeWidth={1.8} />
+              </button>
+            </div>
+          </div>
+        )}
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6">
           <Outlet />
