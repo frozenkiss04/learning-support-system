@@ -14,4 +14,17 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks: they change rarely, so browsers/CDNs can
+        // cache them across deploys while page chunks stay small.
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'data-vendor': ['axios', '@tanstack/react-query', 'zustand'],
+        },
+      },
+    },
+  },
 })
