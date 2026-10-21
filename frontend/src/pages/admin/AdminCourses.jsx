@@ -34,7 +34,7 @@ import LessonManager from "../../components/admin/LessonManager";
  *  - Sửa:  PUT    /api/admin/courses/:id      (BE CHƯA CÓ — qua CourseFormDrawer)
  *  - Xóa:  DELETE /api/admin/courses/:id      (BE CHƯA CÓ)
  *
- * Số Unit/Lesson: hiển thị khi API trả kèm `unit_count` / `lesson_count`
+ * Số Unit/Lesson: hiển thị khi API trả kèm `total_units` / `total_lessons`
  * (hoặc mảng `units` / `lessons`); chưa có thì hiện "—".
  */
 
@@ -253,7 +253,7 @@ export default function AdminCourses() {
       course.title ?? "",
       course.level ?? "",
       course.is_published ? "true" : "false",
-      countOf(course, "lesson_count", "lessons") ?? "",
+      countOf(course, "total_lessons", "lessons") ?? "",
     ]);
     downloadCsv("courses.csv", headers, rows);
   };
@@ -362,8 +362,8 @@ export default function AdminCourses() {
 
               {!coursesQuery.isLoading &&
                 courses.map((course) => {
-                  const unitCount = countOf(course, "unit_count", "units");
-                  const lessonCount = countOf(course, "lesson_count", "lessons");
+                  const unitCount = countOf(course, "total_units", "units");
+                  const lessonCount = countOf(course, "total_lessons", "lessons");
                   const isExpanded = expandedCourseId === course.id;
                   return (
                     <Fragment key={course.id}>

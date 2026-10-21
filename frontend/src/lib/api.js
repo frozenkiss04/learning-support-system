@@ -16,7 +16,7 @@ export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:50
  */
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 90000,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -50,7 +50,7 @@ async function refreshAccessToken() {
       .post(
         `${API_BASE_URL}/api/auth/refresh`,
         {},
-        { headers: { Authorization: `Bearer ${refreshToken}` }, timeout: 30000 },
+        { headers: { Authorization: `Bearer ${refreshToken}` }, timeout: 90000 },
       )
       .then((res) => {
         const accessToken = res.data?.data?.access_token;
