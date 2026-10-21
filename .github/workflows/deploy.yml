@@ -40,9 +40,9 @@ jobs:
     name: Deploy frontend — Vercel
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
+    # NOTE: run the Vercel CLI from the REPO ROOT. The project's Root Directory
+    # is already "frontend" in Vercel settings; running inside frontend/ makes
+    # the build resolve frontend/frontend (no node_modules -> "vite: not found").
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -50,7 +50,6 @@ jobs:
     steps:
       - name: Notice when Vercel is not connected yet
         if: ${{ env.VERCEL_TOKEN == '' }}
-        working-directory: .
         run: |
           echo "::notice::VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID chua duoc cau hinh."
           echo "Import repo tren Vercel (Root Directory = frontend, env VITE_API_URL = URL Render),"
@@ -67,6 +66,7 @@ jobs:
       - name: Install dependencies
         if: ${{ env.VERCEL_TOKEN != '' }}
         # vercel build does NOT install deps on a local runner — vite would be missing.
+        working-directory: frontend
         run: npm ci
 
       - name: Deploy to Vercel (production)
