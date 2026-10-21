@@ -1,11 +1,13 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BookOpen, Flame, LogOut, Trophy, UserRound } from 'lucide-react'
+import { BookOpen, Flame, Layers, LogOut, Trophy, UserRound } from 'lucide-react'
 
+import Logo from '../components/brand/Logo.jsx'
 import { readStoredAuth } from '../routes/ProtectedRoute.jsx'
 import { useAuthStore } from '../stores/authStore.js'
 
 const MENU = [
   { to: '/learn', label: 'Học tập', icon: BookOpen },
+  { to: '/review', label: 'Ôn tập', icon: Layers },
   { to: '/leaderboard', label: 'Bảng xếp hạng', icon: Trophy },
   { to: '/profile', label: 'Hồ sơ', icon: UserRound },
 ]
@@ -47,9 +49,7 @@ export default function LearnerLayout() {
       {/* Sidebar — 240px */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
         <div className="flex h-14 items-center border-b border-slate-200 px-5">
-          <span className="text-base font-semibold tracking-tight text-slate-900">
-            Learn<span className="text-green-700">Hub</span>
-          </span>
+          <Logo size={30} />
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-4">
@@ -78,8 +78,8 @@ export default function LearnerLayout() {
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
-          <span className="text-base font-semibold tracking-tight md:hidden">
-            Learn<span className="text-green-700">Hub</span>
+          <span className="md:hidden">
+            <Logo size={26} />
           </span>
           <div className="hidden md:block" />
 

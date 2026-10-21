@@ -9,6 +9,7 @@ import {
   Users,
 } from 'lucide-react'
 
+import Logo from '../components/brand/Logo.jsx'
 import { readStoredAuth } from '../routes/ProtectedRoute.jsx'
 import { useAuthStore } from '../stores/authStore.js'
 
@@ -83,12 +84,14 @@ export default function AdminLayout() {
     <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* Sidebar — 240px, dark slate for the admin area */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col bg-slate-900 md:flex">
-        <div className="flex h-14 items-center border-b border-slate-800 px-5">
-          <span className="text-base font-semibold tracking-tight text-white">
-            Learn<span className="text-green-500">Hub</span>
-            <span className="ml-2 rounded-sm bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
-              Admin
-            </span>
+        <div className="flex h-14 items-center gap-2.5 border-b border-slate-800 px-5">
+          {/* Full lockup sits on a white plate: its "Learn" wordmark is
+              slate-900 and would be invisible on the dark sidebar. */}
+          <span className="inline-flex items-center rounded-md bg-white px-2 py-1">
+            <Logo size={20} />
+          </span>
+          <span className="rounded-sm bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
+            Admin
           </span>
         </div>
 
