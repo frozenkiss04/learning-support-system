@@ -27,6 +27,21 @@ def test_submit_all_correct_scores_100_and_awards_xp(client, sample_course, lear
     assert all(d["is_correct"] for d in data["details"])
 
 
+def test_submit_normalizes_case_spaces_and_trailing_period(client, sample_course, learner_headers):
+    """'My name is Anna' must match the stored 'My name is Anna.' etc."""
+    answers = dict(sample_course["correct_answers"])
+    one_id = str(sample_course["exercise_ids"][0])
+    original = answers[one_id]
+    if original.endswith("."):
+        answers[one_id] = "  " + original[:-1].upper() + "  "  # bỏ dấu chấm cuối + viết hoa + thừa khoảng trắng
+    else:
+        answers[one_id] = "  " + original.upper() + ".  "
+    resp = _submit(client, sample_course, answers, learner_headers)
+    data = resp.get_json()["data"]
+    assert data["correct"] == data["total"]
+    assert data["score"] == 100
+
+
 def test_submit_all_wrong_scores_zero_and_no_xp(client, sample_course, learner_headers):
     resp = _submit(client, sample_course, sample_course["wrong_answers"], learner_headers)
     assert resp.status_code == 200

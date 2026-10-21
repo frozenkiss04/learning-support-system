@@ -1,8 +1,21 @@
+import re
 from datetime import datetime, timezone
 
 from ..extensions import db
 from ..models.learning import Attempt, Lesson, Streak, UserProgress
 from .srs_service import record_result as srs_record_result
+
+
+def _normalize_answer(value) -> str:
+    """Normalize a free-text answer for comparison.
+
+    Learners type the same correct sentence with different casing, extra
+    spaces, or a trailing period ("My name is Anna" vs the stored
+    "My name is Anna.") — all of those must grade as correct.
+    """
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.rstrip(" .!?,;:")
 
 
 def grade_lesson(user, lesson: Lesson, answers: dict) -> dict:
@@ -21,7 +34,7 @@ def grade_lesson(user, lesson: Lesson, answers: dict) -> dict:
     details = []
     for ex in lesson.exercises:
         submitted = str(answers.get(str(ex.id), answers.get(ex.id, ""))).strip()
-        is_correct = submitted.lower() == (ex.correct_answer or "").strip().lower()
+        is_correct = _normalize_answer(submitted) == _normalize_answer(ex.correct_answer)
         correct += int(is_correct)
         db.session.add(Attempt(user_id=user.id, exercise_id=ex.id,
                                answer=submitted, is_correct=is_correct))
