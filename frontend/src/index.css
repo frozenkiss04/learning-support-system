@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-slate-50 font-sans text-base text-slate-900;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+
+  /* Số liệu / bảng biểu nên dùng số tabular để cột thẳng hàng */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    @apply bg-primary-100 text-primary-900;
+  }
+
+  /* Focus mặc định rõ ràng cho điều hướng bằng bàn phím */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary-700 ring-offset-2 ring-offset-white;
+  }
+
+  /* Scrollbar mảnh, trung tính — không trang trí */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.slate.300') transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-slate-300;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* Vùng nội dung chuẩn cho các page trong app shell / admin */
+  .page-container {
+    @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8;
+  }
+
+  .page-title {
+    @apply text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl;
+  }
+
+  .page-description {
+    @apply mt-1 text-sm text-slate-600;
+  }
+
+  /* Nhãn trường dữ liệu dùng chung khi không import Label component */
+  .form-label {
+    @apply mb-1.5 block text-sm font-medium text-slate-700;
+  }
+
+  .form-hint {
+    @apply mt-1.5 text-xs text-slate-500;
+  }
+
+  .form-error {
+    @apply mt-1.5 text-xs font-medium text-red-600;
+  }
+}
+
+@layer utilities {
+  /* Truncate 2 dòng cho mô tả khóa học / bài học */
+  .clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}

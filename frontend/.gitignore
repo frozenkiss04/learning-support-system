@@ -1,0 +1,11 @@
+# Frontend (React + Vite) — root .gitignore already covers most of this;
+# kept here so frontend/ stays clean if it is ever split into its own repo.
+node_modules/
+dist/
+.vite/
+.env
+.env.*
+!.env.example
+*.local
+npm-debug.log*
+*.tsbuildinfo
