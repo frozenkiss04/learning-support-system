@@ -18,7 +18,7 @@ export default function LeaderboardPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api.get("/leaderboard");
+      const data = await api.get("/api/leaderboard");
       setEntries(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(

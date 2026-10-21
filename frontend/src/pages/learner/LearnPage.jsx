@@ -25,14 +25,14 @@ export default function LearnPage() {
 
   const coursesQuery = useQuery({
     queryKey: ['courses'],
-    queryFn: () => api.get('/courses'),
+    queryFn: () => api.get('/api/courses'),
   });
   const courses = coursesQuery.data ?? [];
   const courseId = selectedCourseId ?? courses[0]?.id ?? null;
 
   const pathQuery = useQuery({
     queryKey: ['course-path', courseId],
-    queryFn: () => api.get(`/courses/${courseId}/path`),
+    queryFn: () => api.get(`/api/courses/${courseId}/path`),
     enabled: courseId != null,
   });
 
