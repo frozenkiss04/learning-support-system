@@ -88,11 +88,14 @@ class AiService:
         return self.provider == "stub" or not self.configured
 
     # -- public interface --------------------------------------------------
-    def chat(self, messages: list[dict], system: str = SYSTEM_TUTOR) -> str:
+    def chat(self, messages: list[dict], system: str = SYSTEM_TUTOR,
+             sources: list[str] | None = None) -> str:
         """Return the assistant reply for ``messages`` ([{role, content}]).
 
         Stub mode returns a clearly-labelled stub reply. Real provider
         failures raise :class:`AiProviderError` (friendly message).
+        ``sources`` (RAG citation titles) only surfaces in stub mode — with a
+        real provider the sources are already woven into ``system``.
         """
         history = self._normalize(messages)
         if self.provider not in _SUPPORTED:
@@ -101,7 +104,7 @@ class AiService:
                 "Hãy dùng 'gemini', 'openai' hoặc 'stub'."
             )
         if self.is_stub:
-            return self._stub_reply(history)
+            return self._stub_reply(history, sources)
         try:
             if self.provider == "gemini":
                 return self._gemini(history, system)
@@ -118,14 +121,15 @@ class AiService:
             logger.warning("AI provider %s returned malformed payload: %s", self.provider, exc)
             raise AiProviderError(FRIENDLY_ERROR) from None
 
-    def stream(self, messages: list[dict], system: str = SYSTEM_TUTOR):
+    def stream(self, messages: list[dict], system: str = SYSTEM_TUTOR,
+               sources: list[str] | None = None):
         """Yield the reply in small chunks (SSE friendly).
 
         The current providers are called non-streaming and the full reply is
         re-chunked — simple and reliable on Render's free tier. Raises
         :class:`AiProviderError` exactly like :meth:`chat`.
         """
-        text = self.chat(messages, system)
+        text = self.chat(messages, system, sources=sources)
         for chunk in re.findall(r"\S+\s*", text):
             yield chunk
 
@@ -143,15 +147,18 @@ class AiService:
                 history.append({"role": role, "content": content})
         return history
 
-    def _stub_reply(self, history: list[dict]) -> str:
+    def _stub_reply(self, history: list[dict], sources: list[str] | None = None) -> str:
         last = history[-1]["content"] if history else ""
-        return (
+        text = (
             "[Chế độ stub — AI chưa được cấu hình] "
             f"Em đã nhận được câu hỏi: \"{last}\". "
             "Đây là câu trả lời mẫu để kiểm tra luồng chat, không phải trả lời "
             "từ AI thật. Đặt AI_PROVIDER cùng GEMINI_API_KEY hoặc "
             "OPENAI_API_KEY trong env (Render > Environment) để bật AI thật."
         )
+        if sources:
+            text += f"\nNguồn tham khảo liên quan: {'; '.join(sources)}"
+        return text
 
     # -- providers -----------------------------------------------------------
     def _gemini(self, history: list[dict], system: str) -> str:

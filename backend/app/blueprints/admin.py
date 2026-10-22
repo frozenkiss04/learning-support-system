@@ -18,7 +18,9 @@ from sqlalchemy.exc import IntegrityError
 from ..extensions import db
 from ..models.course import Course, Unit
 from ..models.learning import EXERCISE_TYPES, Attempt, Exercise, Lesson, Streak
+from ..models.rag import KnowledgeChunk
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
+from ..services import rag_service
 from ..utils.responses import fail, ok
 from ..utils.security import current_user, roles_required
 
@@ -143,6 +145,31 @@ def stats():
         "new_users_last_7_days": new_users_7d,
         "active_users_today": len(attempt_user_ids | streak_user_ids),
     })
+
+
+@admin_bp.get("/rag/stats")
+@manager
+def rag_stats():
+    """Trạng thái chỉ mục RAG: số chunk + chế độ embedding + độ phủ nguồn."""
+    lessons_indexed = (
+        db.session.query(func.count(func.distinct(KnowledgeChunk.source_id)))
+        .filter(KnowledgeChunk.source_type == "lesson").scalar() or 0)
+    exercises_indexed = (
+        db.session.query(func.count(func.distinct(KnowledgeChunk.source_id)))
+        .filter(KnowledgeChunk.source_type == "exercise").scalar() or 0)
+    return ok({
+        "chunks": KnowledgeChunk.query.count(),
+        "mode": rag_service.embedding_mode(),
+        "lessons_indexed": lessons_indexed,
+        "exercises_indexed": exercises_indexed,
+    })
+
+
+@admin_bp.post("/rag/reindex")
+@manager
+def rag_reindex():
+    """Lập lại toàn bộ chỉ mục RAG từ nội dung khóa học đã xuất bản."""
+    return ok(rag_service.build_index())
 
 
 @admin_bp.get("/lessons/weakest")

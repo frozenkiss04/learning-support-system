@@ -25,7 +25,7 @@ def create_app(config_object=Config):
 
     Compress(app)
 
-    from .models import chat, course, learning, review, user  # noqa: F401  (register models)
+    from .models import chat, course, learning, rag, review, user  # noqa: F401  (register models)
 
     from .blueprints.admin import admin_bp
     from .blueprints.ai_chat import ai_bp

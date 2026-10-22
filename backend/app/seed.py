@@ -120,3 +120,15 @@ def register_seed_cli(app):
             f"mới thêm {stats['courses']} course, {stats['units']} unit, "
             f"{stats['lessons']} lesson, {stats['exercises']} exercise."
         )
+
+    @app.cli.command("rag-index")
+    @with_appcontext
+    def rag_index():
+        """(Re)build the RAG knowledge index from published course content."""
+        db.create_all()
+        from .services.rag_service import build_index
+
+        result = build_index()
+        click.echo(
+            f"RAG index xong: {result['chunks']} chunk, "
+            f"embedding mode={result['mode']}.")
