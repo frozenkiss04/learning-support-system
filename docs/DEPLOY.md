@@ -56,7 +56,7 @@ Ghi chú kỹ thuật (đã xử lý sẵn trong `backend/app/config.py`, không
 | `ADMIN_EMAIL` | Mặc định `admin@example.com` nếu không đặt | Không |
 | `ADMIN_PASSWORD` | Mật khẩu admin đầu tiên — **không** dùng mặc định `Admin@12345` trên production | Nên đặt |
 | `AI_PROVIDER` | `gemini` (mặc định) hoặc `openai` | Không |
-| `AI_MODEL` | `gemini-2.0-flash` (mặc định) hoặc model OpenAI tương ứng | Không |
+| `AI_MODEL` | `gemini-3.8-flash` (mặc định) hoặc model OpenAI tương ứng | Không |
 | `GEMINI_API_KEY` | Key từ Google AI Studio — nếu dùng Gemini | Theo provider |
 | `OPENAI_API_KEY` | Key OpenAI — nếu dùng OpenAI | Theo provider |
 | `AI_DAILY_LIMIT` | Mặc định `50`. Lưu ý: biến này hiện mới khai báo trong config, **chưa enforce** trong code; giới hạn đang áp thật là 30 req/giờ cho endpoint AI chat | Không |

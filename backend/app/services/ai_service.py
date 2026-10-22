@@ -49,7 +49,7 @@ FRIENDLY_BLOCKED = (
     "Vui lòng diễn đạt lại câu hỏi theo cách khác."
 )
 
-_DEFAULT_MODELS = {"gemini": "gemini-2.0-flash", "openai": "gpt-4o-mini"}
+_DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "openai": "gpt-4o-mini"}
 _SUPPORTED = ("gemini", "openai", "stub")
 
 

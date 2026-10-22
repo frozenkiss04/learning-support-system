@@ -57,7 +57,7 @@ services:
       - key: AI_PROVIDER
         value: gemini
       - key: AI_MODEL
-        value: gemini-2.0-flash
+        value: gemini-3.8-flash
       - key: AI_DAILY_LIMIT
         value: "50"
       - key: WEB_CONCURRENCY
