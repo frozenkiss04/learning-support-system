@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, BookOpen, Check, ClipboardList, Pencil, Play, Search, Target, Volume2, VolumeX } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertCircle, BookOpen, Check, ClipboardList, Gift, Layers, Pencil, PencilLine, Play, Search, Target, Volume2, VolumeX } from 'lucide-react';
 
-import { apiGet } from '../../lib/api';
+import { apiGet, apiPost } from '../../lib/api';
 import { useCountUp } from '../../hooks/useCountUp';
 import * as sounds from '../../lib/sounds';
 import CommandPalette from '../../components/search/CommandPalette';
@@ -11,6 +11,225 @@ import CoursePicker from '../../components/learning/CoursePicker';
 import UnitSection from '../../components/learning/UnitSection';
 import LearnSkeleton from '../../components/learning/LearnSkeleton';
 import LearnEmptyState from '../../components/learning/LearnEmptyState';
+
+/* ---------- Nhiệm vụ hôm nay (daily quests) ---------- */
+
+// Gán icon theo key nhiệm vụ backend trả về; không khớp thì dùng icon chung.
+const QUEST_ICON_RULES = [
+  { match: ['lesson', 'bai-hoc', 'study'], icon: BookOpen },
+  { match: ['review', 'flash', 'card', 'on-tap', 'ontap'], icon: Layers },
+  { match: ['challenge', 'quiz', 'practice', 'exercise', 'write'], icon: PencilLine },
+];
+
+function questIconFor(quest) {
+  const key = String(quest?.key ?? '').toLowerCase();
+  const rule = QUEST_ICON_RULES.find((r) => r.match.some((m) => key.includes(m)));
+  return rule ? rule.icon : ClipboardList;
+}
+
+const QUEST_CONFETTI_COLORS = ['#15803d', '#16a34a', '#22c55e', '#f59e0b', '#fbbf24', '#94a3b8'];
+
+/**
+ * Confetti ăn mừng khi nhận thưởng nhiệm vụ — cùng cơ chế CSS
+ * (.lss-confetti-piece trong index.css) với ConfettiBurst ở LessonPage.
+ * Component cha chỉ mount ~2.8s rồi gỡ.
+ */
+function QuestConfetti() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 24 }, (_, i) => {
+        const rand = (seed) => {
+          const x = Math.sin(i * 127.1 + seed * 311.7) * 43758.5453;
+          return x - Math.floor(x);
+        };
+        return {
+          id: i,
+          left: `${(rand(1) * 100).toFixed(2)}%`,
+          width: 6 + Math.round(rand(2) * 5),
+          height: 8 + Math.round(rand(3) * 7),
+          backgroundColor: QUEST_CONFETTI_COLORS[i % QUEST_CONFETTI_COLORS.length],
+          borderRadius: i % 4 === 0 ? '50%' : '2px',
+          animationDuration: `${(1.9 + rand(4) * 0.8).toFixed(2)}s`,
+          animationDelay: `${(rand(5) * 0.35).toFixed(2)}s`,
+          drift: `${Math.round((rand(6) - 0.5) * 160)}px`,
+          spin: `${Math.round(360 + rand(7) * 540)}deg`,
+        };
+      }),
+    [],
+  );
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden" aria-hidden="true">
+      {pieces.map((p) => (
+        <span
+          key={p.id}
+          className="lss-confetti-piece"
+          style={{
+            left: p.left,
+            width: p.width,
+            height: p.height,
+            backgroundColor: p.backgroundColor,
+            borderRadius: p.borderRadius,
+            animationDuration: p.animationDuration,
+            animationDelay: p.animationDelay,
+            '--lss-drift': p.drift,
+            '--lss-spin': p.spin,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Thẻ "Nhiệm vụ hôm nay": GET /api/progress/quests ->
+ * { quests: [{ key, title, target, progress, done }], all_done, claimed, claim_xp }.
+ * Xong cả 3 nhiệm vụ thì hiện nút nhận thưởng (POST /api/progress/quests/claim).
+ * Lỗi API thì ẩn thẻ, không ảnh hưởng lộ trình học.
+ */
+function DailyQuestsCard() {
+  const queryClient = useQueryClient();
+  const questsQuery = useQuery({
+    queryKey: ['daily-quests'],
+    queryFn: () => apiGet('/api/progress/quests'),
+  });
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState('');
+  const [justClaimed, setJustClaimed] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
+
+  useEffect(() => {
+    if (!celebrate) return undefined;
+    const timer = window.setTimeout(() => setCelebrate(false), 2800);
+    return () => window.clearTimeout(timer);
+  }, [celebrate]);
+
+  const data = questsQuery.data;
+  if (questsQuery.isError || !data || !Array.isArray(data.quests)) return null;
+
+  const quests = data.quests;
+  const claimed = Boolean(data.claimed) || justClaimed;
+  const canClaim = Boolean(data.all_done) && !claimed;
+  const claimXp = data.claim_xp ?? 30;
+
+  const handleClaim = async () => {
+    if (claiming) return;
+    setClaiming(true);
+    setClaimError('');
+    try {
+      await apiPost('/api/progress/quests/claim', {});
+      setJustClaimed(true);
+      setCelebrate(true);
+      try {
+        sounds.complete();
+      } catch {
+        /* âm thanh là phụ — bỏ qua nếu lỗi */
+      }
+      queryClient.invalidateQueries({ queryKey: ['progress-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['daily-quests'] });
+    } catch (err) {
+      setClaimError(
+        err?.serverMessage ||
+          err?.response?.data?.error?.message ||
+          'Không nhận được thưởng. Vui lòng thử lại.',
+      );
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  return (
+    <section
+      className="mt-6 rounded-lg border border-slate-200 bg-white px-5 py-5 sm:px-6"
+      aria-label="Nhiệm vụ hôm nay"
+    >
+      {celebrate && <QuestConfetti />}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <ClipboardList className="h-4 w-4 text-green-700" aria-hidden="true" />
+          Nhiệm vụ hôm nay
+        </h2>
+        {claimed ? (
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-green-700">
+            <Check className="h-4 w-4" aria-hidden="true" />
+            Đã nhận thưởng hôm nay
+          </span>
+        ) : canClaim ? (
+          <button
+            type="button"
+            onClick={handleClaim}
+            disabled={claiming}
+            className="inline-flex h-9 items-center gap-1.5 rounded-md bg-green-700 px-3 text-sm font-medium text-white hover:bg-green-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Gift className="h-4 w-4" aria-hidden="true" />
+            {claiming ? 'Đang nhận...' : `Nhận +${claimXp} XP`}
+          </button>
+        ) : (
+          <span className="text-xs text-slate-500">
+            Hoàn thành cả {quests.length} nhiệm vụ để nhận +{claimXp} XP
+          </span>
+        )}
+      </div>
+
+      <ul className="mt-4 space-y-3">
+        {quests.map((quest) => {
+          const Icon = questIconFor(quest);
+          const target = Math.max(1, quest.target ?? 1);
+          const progress = Math.min(target, Math.max(0, quest.progress ?? 0));
+          const percent = Math.round((progress / target) * 100);
+          return (
+            <li key={quest.key ?? quest.title} className="flex items-center gap-3">
+              <span
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${
+                  quest.done ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'
+                }`}
+              >
+                <Icon className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p
+                    className={`truncate text-sm ${
+                      quest.done ? 'font-medium text-slate-900' : 'text-slate-700'
+                    }`}
+                  >
+                    {quest.title}
+                  </p>
+                  <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                    {progress}/{target}
+                  </span>
+                </div>
+                <div
+                  className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200"
+                  role="progressbar"
+                  aria-valuenow={progress}
+                  aria-valuemin={0}
+                  aria-valuemax={target}
+                  aria-label={quest.title}
+                >
+                  <div
+                    className="h-full bg-green-700 transition-[width] duration-500 ease-out"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              </div>
+              {quest.done && (
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-700 text-white"
+                  aria-label="Đã hoàn thành"
+                >
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {claimError && <p className="mt-3 text-sm text-red-600">{claimError}</p>}
+    </section>
+  );
+}
 
 /**
  * Learning path page (Duolingo-style path, enterprise layout).
@@ -407,6 +626,9 @@ export default function LearnPage() {
           </div>
         )}
       </header>
+
+      {/* Nhiệm vụ hôm nay — nằm ngay dưới vòng mục tiêu XP trong header */}
+      <DailyQuestsCard />
 
       {/* Path body */}
       <div className="mt-6">

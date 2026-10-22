@@ -16,6 +16,9 @@ const LearnPage = lazy(() => import('./pages/learner/LearnPage.jsx'))
 const LessonPage = lazy(() => import('./pages/learner/LessonPage.jsx'))
 const ReviewPage = lazy(() => import('./pages/learner/ReviewPage.jsx'))
 const ChallengePage = lazy(() => import('./pages/learner/ChallengePage.jsx'))
+const PracticePage = lazy(() => import('./pages/learner/PracticePage.jsx'))
+const SkillsPage = lazy(() => import('./pages/learner/SkillsPage.jsx'))
+const RoleplayPage = lazy(() => import('./pages/learner/RoleplayPage.jsx'))
 const LeaderboardPage = lazy(() => import('./pages/learner/LeaderboardPage.jsx'))
 const ProfilePage = lazy(() => import('./pages/learner/ProfilePage.jsx'))
 
@@ -106,6 +109,30 @@ export default function App() {
           element={
             <Suspense fallback={<PageFallback />}>
               <ChallengePage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/practice"
+          element={
+            <Suspense fallback={<PageFallback />}>
+              <PracticePage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/skills"
+          element={
+            <Suspense fallback={<PageFallback />}>
+              <SkillsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/roleplay"
+          element={
+            <Suspense fallback={<PageFallback />}>
+              <RoleplayPage />
             </Suspense>
           }
         />

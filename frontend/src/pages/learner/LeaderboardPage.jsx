@@ -11,6 +11,28 @@ function initialsOf(name) {
   return (first + last).toUpperCase();
 }
 
+/** Định dạng ngày ISO (date hoặc datetime) thành dd/MM. */
+function formatDayMonth(iso) {
+  if (!iso) return "";
+  const datePart = String(iso).slice(0, 10);
+  const parts = datePart.split("-");
+  if (parts.length !== 3) return "";
+  return `${parts[2]}/${parts[1]}`;
+}
+
+/** Huy hiệu hạng giải đua tuần theo tier backend trả về. Không gradient. */
+function tierBadge(tier) {
+  if (!tier) return null;
+  const t = String(tier).toLowerCase();
+  if (t.includes("gold") || t.includes("vàng") || t.includes("vang"))
+    return { label: "Hạng Vàng", cls: "border-amber-300 bg-amber-100 text-amber-800" };
+  if (t.includes("silver") || t.includes("bạc") || t.includes("bac"))
+    return { label: "Hạng Bạc", cls: "border-slate-300 bg-slate-100 text-slate-700" };
+  if (t.includes("bronze") || t.includes("đồng") || t.includes("dong"))
+    return { label: "Hạng Đồng", cls: "border-orange-300 bg-orange-100 text-orange-800" };
+  return { label: String(tier), cls: "border-slate-300 bg-slate-100 text-slate-700" };
+}
+
 /**
  * Bảng xếp hạng học viên (top 20 theo XP).
  * API: GET /api/leaderboard -> [{ id, full_name, xp }] (đã sort giảm dần theo XP).
@@ -41,6 +63,24 @@ export default function LeaderboardPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Giải đua tuần này — tải độc lập; lỗi thì ẩn mục, không ảnh hưởng bảng tổng.
+  const [league, setLeague] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiGet("/api/progress/weekly-league");
+        if (!cancelled && data && Array.isArray(data.entries)) setLeague(data);
+      } catch {
+        /* ẩn mục giải đua tuần khi API lỗi */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isCurrentUser = (entry) =>
     currentUser &&
@@ -73,6 +113,92 @@ export default function LeaderboardPage() {
           </div>
         )}
       </div>
+
+      {/* Giải đua tuần này */}
+      {league && (
+        <section
+          className="mb-6 overflow-hidden rounded-lg border border-slate-200 bg-white"
+          aria-label="Giải đua tuần này"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div>
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                <Trophy className="h-5 w-5 text-green-700" aria-hidden="true" />
+                Giải đua tuần này
+              </h2>
+              <p className="mt-0.5 text-sm text-slate-500">
+                {formatDayMonth(league.week_start)} – {formatDayMonth(league.week_end)}
+                {" · "}Xếp hạng theo XP kiếm được trong tuần
+              </p>
+            </div>
+            {(() => {
+              const badge = tierBadge(league.tier);
+              return badge ? (
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold ${badge.cls}`}
+                >
+                  <Medal className="h-3.5 w-3.5" aria-hidden="true" />
+                  {badge.label}
+                </span>
+              ) : null;
+            })()}
+          </div>
+
+          {league.entries.length === 0 ? (
+            <p className="px-5 py-8 text-center text-sm text-slate-600">
+              Chưa có ai ghi điểm tuần này. Hoàn thành bài học để ghi điểm tuần.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {league.entries.map((entry, index) => {
+                const rank = entry.rank ?? index + 1;
+                return (
+                  <li
+                    key={entry.user_id ?? entry.id ?? index}
+                    className={`flex items-center gap-3 px-5 py-3 ${
+                      entry.is_me ? "bg-green-50" : "bg-white"
+                    }`}
+                  >
+                    <span className="w-8 shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                      {rank}
+                    </span>
+                    <span
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                        entry.is_me
+                          ? "bg-primary-700 text-white"
+                          : "bg-slate-200 text-slate-700"
+                      }`}
+                      aria-hidden="true"
+                    >
+                      {initialsOf(entry.full_name)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">
+                      {entry.full_name}
+                      {entry.is_me && (
+                        <span className="ml-2 inline-flex items-center rounded-md border border-green-300 bg-white px-1.5 py-0.5 align-middle text-xs font-medium text-green-800">
+                          Bạn
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                      {Number(entry.weekly_xp || 0).toLocaleString("vi-VN")} XP
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {league.my_rank != null && (
+            <p className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-sm text-slate-700">
+              Hạng của bạn tuần này:{" "}
+              <span className="font-semibold text-slate-900">#{league.my_rank}</span>
+              {" — "}
+              {Number(league.my_weekly_xp || 0).toLocaleString("vi-VN")} XP
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Bảng xếp hạng */}
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">

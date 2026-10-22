@@ -12,7 +12,7 @@
  * lỗi ở khối nào chỉ hiện ở khối đó, kèm nút thử lại. Không số liệu giả.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, BookOpen, Layers, RefreshCw, RotateCcw, Target, Users } from 'lucide-react';
+import { AlertTriangle, BookOpen, Layers, RefreshCw, RotateCcw, Sparkles, Target, Users } from 'lucide-react';
 
 import api from '../../lib/api';
 import ActivityChart from '../../components/admin/ActivityChart';
@@ -33,6 +33,24 @@ function errorMessage(err, fallback) {
 }
 
 const initialSection = { loading: true, error: null, data: null };
+
+// Nhãn tiếng Việt cho các khóa số liệu trong báo cáo tuần (stats do BE trả về).
+const WEEKLY_STAT_LABELS = {
+  total_learners: 'Tổng học viên',
+  total_users: 'Tổng người dùng',
+  new_users: 'Học viên mới',
+  new_users_last_7_days: 'Học viên mới (7 ngày)',
+  active_users: 'Học viên đang hoạt động',
+  active_users_today: 'Hoạt động hôm nay',
+  total_attempts: 'Lượt làm bài',
+  attempts: 'Lượt làm bài',
+  accuracy_percent: 'Tỉ lệ đúng',
+  total_courses: 'Khóa học',
+  total_lessons: 'Bài học',
+  total_exercises: 'Bài tập',
+  xp_earned: 'XP toàn hệ thống',
+  completed_lessons: 'Bài học hoàn thành',
+};
 
 export default function AdminDashboard() {
   const [statsState, setStatsState] = useState(initialSection);
@@ -74,6 +92,30 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // Báo cáo tuần bằng AI — POST /api/admin/ai/weekly-report (chỉ tạo khi bấm nút).
+  const [reportState, setReportState] = useState({ loading: false, error: null, data: null });
+
+  const generateReport = useCallback(async () => {
+    setReportState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      const data = unwrap(await api.post('/api/admin/ai/weekly-report', {}));
+      setReportState({ loading: false, error: null, data });
+    } catch (err) {
+      setReportState((s) => ({
+        ...s,
+        loading: false,
+        error: errorMessage(err, 'Không tạo được báo cáo tuần. Vui lòng thử lại.'),
+      }));
+    }
+  }, []);
+
+  const report = reportState.data;
+  const reportStats = report?.stats
+    ? Object.entries(report.stats)
+        .filter(([, value]) => typeof value === 'number')
+        .slice(0, 3)
+    : [];
 
   const stats = statsState.data;
   const refreshing = statsState.loading || weakState.loading;
@@ -178,6 +220,126 @@ export default function AdminDashboard() {
           />
         </div>
       </div>
+
+      {/* Báo cáo tuần bằng AI */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
+              <Sparkles size={16} className="text-green-700" aria-hidden="true" />
+              Báo cáo tuần bằng AI
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {report?.week_label
+                ? `Tuần: ${report.week_label}`
+                : 'Tổng kết hoạt động học tập trong tuần từ số liệu thật của hệ thống.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {report && (
+              <span
+                className={`inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium ${
+                  report.generated_by === 'ai'
+                    ? 'border-green-200 bg-green-50 text-green-700'
+                    : 'border-slate-200 bg-slate-100 text-slate-600'
+                }`}
+              >
+                {report.generated_by === 'ai' ? 'Do AI tạo' : 'Bản mẫu từ số liệu'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={generateReport}
+              disabled={reportState.loading}
+              className="inline-flex items-center gap-1.5 rounded-md bg-green-700 px-3 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Sparkles
+                size={15}
+                className={reportState.loading ? 'animate-pulse' : undefined}
+                aria-hidden="true"
+              />
+              {reportState.loading
+                ? 'Đang tạo báo cáo...'
+                : report
+                  ? 'Tạo lại báo cáo'
+                  : 'Tạo báo cáo tuần'}
+            </button>
+          </div>
+        </div>
+
+        {reportState.error && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+            <p className="text-sm text-red-700">{reportState.error}</p>
+          </div>
+        )}
+
+        {reportState.loading && !report && (
+          <p className="mt-4 text-sm text-slate-500">
+            Đang phân tích số liệu tuần, quá trình này có thể mất vài giây...
+          </p>
+        )}
+
+        {!report && !reportState.loading && !reportState.error && (
+          <p className="mt-4 text-sm leading-6 text-slate-600">
+            Bấm "Tạo báo cáo tuần" để AI tóm tắt tình hình học tập tuần này, nêu các
+            điểm đáng chú ý và đề xuất hành động cải thiện cho quản trị viên.
+          </p>
+        )}
+
+        {report && (
+          <div className="mt-4 space-y-5">
+            {reportStats.length > 0 && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {reportStats.map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+                  >
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      {WEEKLY_STAT_LABELS[key] ?? key.replace(/_/g, ' ')}
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums text-slate-900">
+                      {numberFmt.format(value)}
+                      {key.includes('percent') ? '%' : ''}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {report.summary && (
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Tổng kết</h3>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                  {report.summary}
+                </p>
+              </div>
+            )}
+
+            {Array.isArray(report.insights) && report.insights.length > 0 && (
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Điểm đáng chú ý</h3>
+                <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
+                  {report.insights.map((insight, i) => (
+                    <li key={i}>{insight}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {Array.isArray(report.suggestions) && report.suggestions.length > 0 && (
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Đề xuất hành động</h3>
+                <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-700">
+                  {report.suggestions.map((suggestion, i) => (
+                    <li key={i}>{suggestion}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

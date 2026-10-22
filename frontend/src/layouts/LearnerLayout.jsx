@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { BookOpen, Flame, Layers, LogOut, Trophy, UserRound, X, Zap } from 'lucide-react'
+import { BookOpen, Brain, Flame, Layers, LogOut, MessagesSquare, Mic, Trophy, UserRound, X, Zap } from 'lucide-react'
 
 import Logo from '../components/brand/Logo.jsx'
 import { apiGet } from '../lib/api.js'
@@ -11,6 +11,9 @@ const MENU = [
   { to: '/learn', label: 'Học tập', icon: BookOpen },
   { to: '/review', label: 'Ôn tập', icon: Layers },
   { to: '/challenge', label: 'Thử thách', icon: Zap },
+  { to: '/skills', label: 'Kỹ năng', icon: Mic },
+  { to: '/roleplay', label: 'Nhập vai AI', icon: MessagesSquare },
+  { to: '/practice', label: 'Luyện tập AI', icon: Brain },
   { to: '/leaderboard', label: 'Bảng xếp hạng', icon: Trophy },
   { to: '/profile', label: 'Hồ sơ', icon: UserRound },
 ]
