@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronRight,
+  CircleCheck,
+  Database,
   Loader2,
   MessageSquare,
   Plus,
+  RefreshCw,
   Send,
   TriangleAlert,
 } from "lucide-react";
-import api from "../../lib/api";
+import api, { apiGet, apiPost } from "../../lib/api";
 
 /**
  * Trợ lý AI quản lý (admin/teacher).
@@ -34,6 +37,157 @@ function extractSessions(res) {
   const items = Array.isArray(res) ? res : res?.data ?? res?.items ?? [];
   return (Array.isArray(items) ? items : []).filter(
     (s) => !s.context_type || s.context_type === "ADMIN"
+  );
+}
+
+/**
+ * Thẻ "Cơ sở tri thức RAG" — trạng thái chỉ mục phục vụ AI Tutor.
+ *
+ * API:
+ * - GET  /api/admin/rag/stats   -> { chunks, mode: "gemini" | "local", lessons_indexed, exercises_indexed }
+ * - POST /api/admin/rag/reindex -> { chunks, mode } (chạy vài giây)
+ * Nếu endpoint chưa sẵn sàng/lỗi ở lần tải đầu, thẻ tự ẩn để không phá trang.
+ */
+function RagKnowledgeCard() {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [notice, setNotice] = useState(null); // { type: "success" | "error", text }
+
+  const loadStats = useCallback(async () => {
+    try {
+      const data = await apiGet("/api/admin/rag/stats");
+      setStats(data);
+      setUnavailable(false);
+    } catch {
+      setUnavailable(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  const handleReindex = async () => {
+    if (reindexing) return;
+    setReindexing(true);
+    setNotice(null);
+    try {
+      const result = await apiPost("/api/admin/rag/reindex", {});
+      // Reindex chỉ trả { chunks, mode } — tải lại stats để có đủ các số liệu còn lại.
+      let fresh = result;
+      try {
+        fresh = await apiGet("/api/admin/rag/stats");
+      } catch {
+        /* giữ kết quả reindex nếu stats tạm lỗi */
+      }
+      setStats((prev) => ({ ...(prev ?? {}), ...(fresh ?? {}) }));
+      const chunks = fresh?.chunks ?? result?.chunks;
+      setNotice({
+        type: "success",
+        text: `Đã lập chỉ mục lại xong${typeof chunks === "number" ? `: ${chunks.toLocaleString("vi-VN")} đoạn tri thức` : ""}.`,
+      });
+    } catch (err) {
+      setNotice({
+        type: "error",
+        text: err?.serverMessage || err?.message || "Lập chỉ mục lại thất bại. Vui lòng thử lại.",
+      });
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  if (unavailable && !loading) return null;
+
+  const isGemini = stats?.mode === "gemini";
+  const fmt = (n) => (typeof n === "number" ? n.toLocaleString("vi-VN") : "—");
+  const statItems = [
+    { label: "Đoạn tri thức (chunk)", value: fmt(stats?.chunks) },
+    { label: "Bài học đã lập chỉ mục", value: fmt(stats?.lessons_indexed) },
+    { label: "Bài tập đã lập chỉ mục", value: fmt(stats?.exercises_indexed) },
+  ];
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-green-50 text-green-700">
+            <Database className="h-5 w-5" />
+          </span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm font-semibold text-slate-900">Cơ sở tri thức RAG</h2>
+              {!loading && stats && (
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                    isGemini
+                      ? "bg-green-100 text-green-800"
+                      : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  Embedding: {isGemini ? "Gemini" : "Cục bộ"}
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-sm text-slate-500">
+              AI Tutor trả lời dựa trên nội dung bài học/bài tập đã lập chỉ mục.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleReindex}
+          disabled={reindexing || loading}
+          className="inline-flex shrink-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${reindexing ? "animate-spin" : ""}`} />
+          {reindexing ? "Đang lập chỉ mục..." : "Lập chỉ mục lại"}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="mt-4 grid grid-cols-3 gap-3" aria-hidden="true">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-16 animate-pulse rounded-md bg-slate-100" />
+          ))}
+        </div>
+      ) : (
+        <>
+          <dl className="mt-4 grid grid-cols-3 gap-3">
+            {statItems.map((item) => (
+              <div key={item.label} className="rounded-md bg-slate-50 px-3 py-2.5">
+                <dd className="text-lg font-semibold leading-6 text-slate-900">{item.value}</dd>
+                <dt className="mt-0.5 text-xs text-slate-500">{item.label}</dt>
+              </div>
+            ))}
+          </dl>
+          {stats && !isGemini && (
+            <p className="mt-3 text-xs text-slate-500">
+              Đang dùng embedding cục bộ. Nạp GEMINI_API_KEY để dùng embedding Gemini.
+            </p>
+          )}
+          {notice && (
+            <div
+              className={`mt-3 flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm ${
+                notice.type === "success"
+                  ? "border-green-200 bg-green-50 text-green-800"
+                  : "border-red-200 bg-red-50 text-red-700"
+              }`}
+            >
+              {notice.type === "success" ? (
+                <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              ) : (
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              )}
+              <span>{notice.text}</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -183,6 +337,12 @@ export default function AdminAiAssistant() {
             Trợ lý chỉ trả lời dựa trên số liệu hệ thống cung cấp, không tự suy đoán số liệu ngoài dữ liệu.
           </p>
         </header>
+
+        <div className="px-5 pt-4">
+          <div className="mx-auto max-w-3xl">
+            <RagKnowledgeCard />
+          </div>
+        </div>
 
         {error && (
           <div className="mx-5 mt-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
