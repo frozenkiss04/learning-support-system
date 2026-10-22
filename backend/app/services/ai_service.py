@@ -9,6 +9,11 @@ provider can be swapped via env without touching blueprints:
 - ``AI_PROVIDER=stub`` — or simply no key configured: stub mode. Stub replies
   are always labelled as stub, never passed off as real AI answers.
 
+Failover (opt-in, ``AI_FALLBACK_ENABLED=true``): nếu provider chính (gemini)
+lỗi sau retry nội bộ, tự chuyển sang đường OpenAI-compatible
+(``OPENAI_API_KEY`` + ``OPENAI_BASE_URL``, vd Groq) với ``AI_FALLBACK_MODEL``
+(mặc định ``llama-3.3-70b-versatile``).
+
 API keys are read from env only — never hardcode them here.
 Provider failures (timeout, HTTP error, malformed payload) raise
 ``AiProviderError`` with a user-friendly Vietnamese message; the blueprint
@@ -76,6 +81,13 @@ class AiService:
             "gemini": os.getenv("GEMINI_API_KEY", "").strip(),
             "openai": os.getenv("OPENAI_API_KEY", "").strip(),
         }
+        # Failover (opt-in): khi provider chính lỗi sau retry nội bộ, thử đường
+        # OpenAI-compatible (OPENAI_API_KEY + OPENAI_BASE_URL, vd Groq) với
+        # model dự phòng. Tắt mặc định — hành vi cũ giữ nguyên tới khi bật env.
+        self.fallback_enabled = os.getenv(
+            "AI_FALLBACK_ENABLED", "").strip().lower() in ("true", "1", "yes")
+        self.fallback_model = (os.getenv("AI_FALLBACK_MODEL", "").strip()
+                               or "llama-3.3-70b-versatile")
 
     # -- state -------------------------------------------------------------
     @property
@@ -86,6 +98,14 @@ class AiService:
     @property
     def is_stub(self) -> bool:
         return self.provider == "stub" or not self.configured
+
+    @property
+    def _fallback_available(self) -> bool:
+        """Failover chỉ áp dụng khi provider chính là gemini (đường dự phòng
+        chính là path OpenAI-compatible) và đã có OPENAI_API_KEY."""
+        return (self.fallback_enabled
+                and self.provider == "gemini"
+                and bool(self._keys.get("openai")))
 
     # -- public interface --------------------------------------------------
     def chat(self, messages: list[dict], system: str = SYSTEM_TUTOR,
@@ -107,8 +127,28 @@ class AiService:
             return self._stub_reply(history, sources)
         try:
             if self.provider == "gemini":
-                return self._gemini(history, system)
-            return self._openai(history, system)
+                return self._convert_errors(self._gemini, history, system)
+            return self._convert_errors(self._openai, history, system)
+        except AiProviderError as primary_error:
+            if not self._fallback_available:
+                raise
+            logger.info(
+                "AI fallback engaged: primary %s failed, trying "
+                "OpenAI-compatible fallback model %s",
+                self.provider, self.fallback_model)
+            try:
+                return self._convert_errors(
+                    self._openai, history, system, model=self.fallback_model)
+            except AiProviderError:
+                logger.warning(
+                    "AI fallback (model %s) also failed — surfacing the "
+                    "primary provider error", self.fallback_model)
+                raise primary_error from None
+
+    def _convert_errors(self, fn, *args, **kwargs):
+        """Gọi một hàm provider, đổi mọi lỗi thành AiProviderError thân thiện."""
+        try:
+            return fn(*args, **kwargs)
         except AiProviderError:
             raise
         except requests.Timeout:
@@ -211,12 +251,13 @@ class AiService:
             raise AiProviderError(FRIENDLY_BLOCKED)
         return text
 
-    def _openai(self, history: list[dict], system: str) -> str:
+    def _openai(self, history: list[dict], system: str,
+                model: str | None = None) -> str:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         resp = self._post_with_retry(
             f"{base_url}/chat/completions",
             json={
-                "model": self.model,
+                "model": model or self.model,
                 "messages": [{"role": "system", "content": system}] + history,
                 "max_tokens": self.max_tokens,
             },
