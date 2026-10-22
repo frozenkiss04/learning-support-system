@@ -8,6 +8,7 @@ Quyền truy cập:
 
 Mọi lỗi đều trả qua ``utils/responses.fail`` với thông báo tiếng Việt.
 """
+import json
 import re
 from datetime import date, timedelta
 
@@ -21,6 +22,7 @@ from ..models.learning import EXERCISE_TYPES, Attempt, Exercise, Lesson, Streak
 from ..models.rag import KnowledgeChunk
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
 from ..services import rag_service
+from ..services.ai_service import AiProviderError, AiService
 from ..utils.responses import fail, ok
 from ..utils.security import current_user, roles_required
 
@@ -212,6 +214,159 @@ def weakest_lessons():
         }
         for r in rows
     ])
+
+
+# ---------------------------------------------------------------------------
+# Báo cáo tuần do AI phân tích
+# ---------------------------------------------------------------------------
+
+WEEKLY_REPORT_SYSTEM = (
+    "Bạn là chuyên gia phân tích dữ liệu học tập. Dựa CHỈ trên snapshot số "
+    "liệu hệ thống được cung cấp (tuyệt đối không bịa thêm con số), hãy viết "
+    "báo cáo tuần ngắn gọn. Chỉ trả về JSON thuần (không markdown) theo cấu "
+    "trúc: {\"summary\": \"tóm tắt 2-3 câu\", \"insights\": [\"nhận định\", "
+    "...], \"suggestions\": [\"đề xuất hành động\", ...]}. Tối đa 4 insights "
+    "và 4 suggestions, viết bằng tiếng Việt."
+)
+
+
+def _parse_weekly_report(text):
+    """Parse JSON báo cáo từ AI; sai cấu trúc thì trả None để dùng template."""
+    if not text:
+        return None
+    cleaned = re.sub(r"```(?:json)?", "", str(text)).strip()
+    data = None
+    try:
+        data = json.loads(cleaned)
+    except ValueError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except ValueError:
+                data = None
+    if not isinstance(data, dict):
+        return None
+    summary = str(data.get("summary") or "").strip()
+    insights = [str(i).strip() for i in data.get("insights") or [] if str(i).strip()]
+    suggestions = [str(s).strip() for s in data.get("suggestions") or [] if str(s).strip()]
+    if not summary or not insights or not suggestions:
+        return None
+    return {"summary": summary, "insights": insights[:4], "suggestions": suggestions[:4]}
+
+
+def _template_weekly_report(snap):
+    """Báo cáo khuôn mẫu từ số liệu THẬT (khi AI ở chế độ stub hoặc lỗi)."""
+    summary = (
+        f"Trong 7 ngày qua, hệ thống ghi nhận {snap['attempts_7d']} lượt làm bài "
+        f"từ {snap['active_users_7d']} học viên đang hoạt động, tỉ lệ trả lời đúng "
+        f"đạt {snap['accuracy_7d']}%. Toàn hệ thống hiện có {snap['total_learners']} "
+        f"học viên với {snap['total_attempts']} lượt làm bài lũy kế, tỉ lệ đúng "
+        f"{snap['accuracy_percent']}%."
+    )
+    insights = [
+        f"Tỉ lệ đúng trong 7 ngày là {snap['accuracy_7d']}% trên "
+        f"{snap['attempts_7d']} lượt làm bài.",
+        f"Có {snap['new_users_7d']} học viên đăng ký mới trong 7 ngày qua.",
+    ]
+    if snap["weakest"]:
+        worst = snap["weakest"][0]
+        insights.append(
+            f"Bài học yếu nhất là '{worst['title']}' với tỉ lệ đúng chỉ "
+            f"{worst['accuracy_percent']}% qua {worst['attempts']} lượt làm.")
+    suggestions = []
+    if snap["weakest"]:
+        suggestions.append(
+            f"Bổ sung ví dụ và bài luyện tập cho bài '{snap['weakest'][0]['title']}' "
+            "— bài có tỉ lệ đúng thấp nhất hiện nay.")
+    suggestions += [
+        "Nhắc học viên ôn tập các thẻ ghi nhớ đến hạn để củng cố điểm yếu.",
+        "Theo dõi tỉ lệ đúng theo tuần để đánh giá hiệu quả sau khi cải tiến nội dung.",
+    ]
+    return {"summary": summary, "insights": insights, "suggestions": suggestions}
+
+
+@admin_bp.post("/ai/weekly-report")
+@manager
+def ai_weekly_report():
+    """Báo cáo tuần: AI phân tích snapshot số liệu thật (fallback: template)."""
+    today = date.today()
+    seven_days_ago = today - timedelta(days=7)
+    in_7d = func.date(Attempt.created_at) >= seven_days_ago
+
+    total_attempts = Attempt.query.count()
+    correct = Attempt.query.filter_by(is_correct=True).count()
+    accuracy = round(correct * 100 / total_attempts, 1) if total_attempts else 0
+    attempts_7d = Attempt.query.filter(in_7d).count()
+    correct_7d = Attempt.query.filter(Attempt.is_correct.is_(True), in_7d).count()
+    active_7d = (db.session.query(func.count(func.distinct(Attempt.user_id)))
+                 .filter(in_7d).scalar() or 0)
+
+    # Bài học yếu nhất (cùng cách tính với /lessons/weakest, lấy 3 bài đầu).
+    acc_expr = func.avg(case((Attempt.is_correct, 1.0), else_=0.0))
+    weakest_rows = (
+        db.session.query(Lesson.title, func.count(Attempt.id), acc_expr)
+        .join(Exercise, Exercise.lesson_id == Lesson.id)
+        .join(Attempt, Attempt.exercise_id == Exercise.id)
+        .group_by(Lesson.id, Lesson.title)
+        .order_by(acc_expr.asc(), func.count(Attempt.id).desc())
+        .limit(3).all()
+    )
+    weakest = [{"title": title, "attempts": n,
+                "accuracy_percent": round(float(acc or 0) * 100, 1)}
+               for title, n, acc in weakest_rows]
+
+    snap = {
+        "total_learners": User.query.filter_by(role=ROLE_LEARNER).count(),
+        "total_attempts": total_attempts,
+        "accuracy_percent": accuracy,
+        "attempts_7d": attempts_7d,
+        "accuracy_7d": round(correct_7d * 100 / attempts_7d, 1) if attempts_7d else 0,
+        "new_users_7d": (User.query
+                         .filter(func.date(User.created_at) >= seven_days_ago).count()),
+        "active_users_7d": active_7d,
+        "weakest": weakest,
+    }
+
+    snapshot_lines = [
+        "Snapshot số liệu hệ thống (7 ngày gần nhất + lũy kế):",
+        f"- Tổng học viên: {snap['total_learners']}",
+        f"- Lượt làm bài lũy kế: {snap['total_attempts']} (tỉ lệ đúng {snap['accuracy_percent']}%)",
+        f"- Lượt làm bài 7 ngày: {snap['attempts_7d']} (tỉ lệ đúng {snap['accuracy_7d']}%)",
+        f"- Học viên hoạt động 7 ngày: {snap['active_users_7d']}",
+        f"- Học viên đăng ký mới 7 ngày: {snap['new_users_7d']}",
+    ]
+    if weakest:
+        snapshot_lines.append("- Bài học yếu nhất:")
+        for w in weakest:
+            snapshot_lines.append(
+                f"  + {w['title']}: đúng {w['accuracy_percent']}% qua {w['attempts']} lượt làm")
+
+    report, generated_by = None, "template"
+    service = AiService()
+    if not service.is_stub:
+        try:
+            raw = service.chat(
+                [{"role": "user", "content": "\n".join(snapshot_lines)}],
+                WEEKLY_REPORT_SYSTEM)
+            report = _parse_weekly_report(raw)
+        except AiProviderError:
+            report = None
+        if report:
+            generated_by = "ai"
+    if report is None:
+        report = _template_weekly_report(snap)
+
+    return ok({
+        "week_label": "Tuần này",
+        "generated_by": generated_by,
+        **report,
+        "stats": {
+            "total_learners": snap["total_learners"],
+            "total_attempts": snap["total_attempts"],
+            "accuracy_percent": snap["accuracy_percent"],
+        },
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,8 @@ prompt của nhánh này chỉ cho phép dùng số liệu do backend cung cấp
 """
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
 from flask_jwt_extended import jwt_required
@@ -21,9 +22,12 @@ from ..extensions import db, limiter
 from ..models.chat import ChatMessage, ChatSession
 from ..models.course import Course
 from ..models.learning import Attempt, Exercise, Lesson, UserProgress
+from ..models.practice import AiPracticeSet
+from ..models.review import ReviewCard
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
 from ..services import rag_service
 from ..services.ai_service import SYSTEM_ADMIN, SYSTEM_TUTOR, AiProviderError, AiService
+from ..services.progress_service import _normalize_answer
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
 
@@ -31,7 +35,78 @@ logger = logging.getLogger(__name__)
 
 ai_bp = Blueprint("ai", __name__)
 
-CONTEXT_TYPES = ("LESSON", "ADMIN")
+CONTEXT_TYPES = ("LESSON", "ADMIN", "ROLEPLAY")
+
+# ---------------------------------------------------------------------------
+# Chat nhập vai (ROLEPLAY): AI đóng vai nhân vật trong tình huống giao tiếp.
+# context_id là cột Integer (id bài học) nên không mã hóa scenario vào đó —
+# session lưu context_type="ROLEPLAY", context_id=NULL; scenario được gửi
+# kèm từng lượt chat và chỉ dùng khi dựng system prompt.
+# ---------------------------------------------------------------------------
+_ROLEPLAY_RULES = (
+    " Hãy hội thoại HOÀN TOÀN bằng tiếng Anh ở trình độ A1–A2: câu ngắn, từ "
+    "vựng đơn giản. Nếu học viên mắc lỗi ngữ pháp hoặc dùng sai từ, hãy nhẹ "
+    "nhàng sửa bằng một ghi chú ngắn trong ngoặc đơn ở cuối câu trả lời, ví "
+    "dụ: (Small correction: say 'a coffee', not 'one coffee'). Mỗi lượt trả "
+    "lời tối đa 2–3 câu và luôn kết thúc bằng một câu hỏi để học viên nói "
+    "tiếp. Tuyệt đối không thoát vai, không giải thích dài dòng bằng tiếng Việt."
+)
+ROLEPLAY_SCENARIOS = {
+    "cafe": {
+        "title": "Quán cà phê",
+        "system": (
+            "Bạn đang đóng vai nhân viên pha chế (barista) thân thiện tại một "
+            "quán cà phê. Học viên là khách hàng đang luyện tiếng Anh. Hãy giữ "
+            "đúng vai: chào khách, hỏi khách muốn uống gì, hỏi size nóng/đá, "
+            "lượng đường, gợi ý món bán chạy, xác nhận đơn và báo giá."
+            + _ROLEPLAY_RULES
+        ),
+    },
+    "hotel": {
+        "title": "Khách sạn",
+        "system": (
+            "Bạn đang đóng vai lễ tân khách sạn lịch sự. Học viên là khách đang "
+            "luyện tiếng Anh. Hãy giữ đúng vai: chào khách, hỏi tên và thông tin "
+            "đặt phòng, số đêm lưu trú, loại phòng, hỏi giấy tờ tùy thân, giới "
+            "thiệu giờ ăn sáng và các dịch vụ của khách sạn."
+            + _ROLEPLAY_RULES
+        ),
+    },
+    "airport": {
+        "title": "Sân bay",
+        "system": (
+            "Bạn đang đóng vai nhân viên quầy check-in tại sân bay. Học viên là "
+            "hành khách đang luyện tiếng Anh. Hãy giữ đúng vai: chào hành khách, "
+            "hỏi hộ chiếu và vé, điểm đến, hành lý ký gửi/xách tay, chọn ghế "
+            "cạnh cửa sổ hay lối đi, và thông báo cổng khởi hành."
+            + _ROLEPLAY_RULES
+        ),
+    },
+    "interview": {
+        "title": "Phỏng vấn xin việc",
+        "system": (
+            "Bạn đang đóng vai nhà tuyển dụng thân thiện trong một buổi phỏng "
+            "vấn xin việc đơn giản. Học viên là ứng viên đang luyện tiếng Anh. "
+            "Hãy giữ đúng vai: chào ứng viên, mời giới thiệu bản thân, hỏi về "
+            "điểm mạnh, kinh nghiệm học tập/làm việc và lý do ứng tuyển, mỗi "
+            "lượt chỉ hỏi một câu."
+            + _ROLEPLAY_RULES
+        ),
+    },
+}
+SYSTEM_ROLEPLAY_GENERIC = (
+    "Bạn đang nhập vai một nhân vật trong tình huống giao tiếp tiếng Anh với "
+    "học viên (vai cụ thể đã được thiết lập trong các lượt trò chuyện trước). "
+    "Hãy tiếp tục giữ đúng vai đó." + _ROLEPLAY_RULES
+)
+
+
+def _clean_scenario(value):
+    """Trả về key scenario hợp lệ (lowercase) hoặc None nếu sai/thiếu."""
+    if not isinstance(value, str):
+        return None
+    key = value.strip().lower()
+    return key if key in ROLEPLAY_SCENARIOS else None
 ADMIN_ROLES = (ROLE_ADMIN, ROLE_TEACHER)
 MAX_MESSAGE_CHARS = 4000
 HISTORY_LIMIT = 20  # chỉ gửi 20 lượt gần nhất cho AI để khống chế token/chi phí
@@ -148,6 +223,9 @@ def _rag_context(session, history) -> tuple[str, list[str]]:
 
 
 def _build_system_prompt(user, session) -> str:
+    if session.context_type == "ROLEPLAY":
+        info = ROLEPLAY_SCENARIOS.get(getattr(session, "_roleplay_scenario", None) or "")
+        return info["system"] if info else SYSTEM_ROLEPLAY_GENERIC
     if session.context_type == "ADMIN":
         return SYSTEM_ADMIN + "\n\n" + _admin_stats_context()
     system = SYSTEM_TUTOR
@@ -170,6 +248,14 @@ def _prepare_turn(user, body):
     if len(message) > MAX_MESSAGE_CHARS:
         return None, None, fail(f"Tin nhắn tối đa {MAX_MESSAGE_CHARS} ký tự")
 
+    # Scenario nhập vai: nếu client gửi kèm thì phải thuộc danh sách hợp lệ.
+    scenario = None
+    if body.get("scenario") is not None:
+        scenario = _clean_scenario(body.get("scenario"))
+        if scenario is None:
+            return None, None, fail(
+                "scenario phải là một trong: " + ", ".join(sorted(ROLEPLAY_SCENARIOS)))
+
     session_id = body.get("session_id")
     if session_id:
         # Ownership check: user không đọc/ghi được session của người khác.
@@ -182,6 +268,10 @@ def _prepare_turn(user, body):
         if context_type not in CONTEXT_TYPES:
             return None, None, fail(
                 f"context_type phải là một trong: {', '.join(CONTEXT_TYPES)}")
+        if context_type == "ROLEPLAY" and scenario is None:
+            # Phiên nhập vai mới bắt buộc chọn một tình huống hợp lệ.
+            return None, None, fail(
+                "scenario phải là một trong: " + ", ".join(sorted(ROLEPLAY_SCENARIOS)))
         session = None
 
     if context_type == "ADMIN" and user.role not in ADMIN_ROLES:
@@ -189,6 +279,8 @@ def _prepare_turn(user, body):
 
     if session is None:
         context_id = body.get("context_id")
+        if context_type == "ROLEPLAY":
+            context_id = None  # scenario không mã hóa vào context_id (cột Integer)
         if context_id is not None:
             try:
                 context_id = int(context_id)
@@ -201,6 +293,12 @@ def _prepare_turn(user, body):
                               context_id=context_id, title=message[:80])
         db.session.add(session)
         db.session.commit()
+
+    if session.context_type == "ROLEPLAY":
+        # Thuộc tính tạm trên object phiên (không lưu DB): lượt tạo phiên dùng
+        # scenario đã validate; lượt nối tiếp không gửi scenario thì None và
+        # prompt nhập vai chung sẽ giữ vai theo lịch sử hội thoại.
+        session._roleplay_scenario = scenario
 
     db.session.add(ChatMessage(session_id=session.id, role="user", content=message))
     db.session.commit()
@@ -311,6 +409,238 @@ def sessions():
         "message_count": len(s.messages),
         "created_at": s.created_at.isoformat() if s.created_at else None,
     } for s in rows])
+
+
+# --------------------------------------------------------------------------
+# Bộ bài luyện tập AI cá nhân hóa (mỗi user một bộ mỗi ngày)
+# --------------------------------------------------------------------------
+PRACTICE_SET_SIZE = 5
+PRACTICE_XP_PER_CORRECT = 4  # 5 câu đúng hết = tối đa 20 XP
+
+PRACTICE_SYSTEM = (
+    "Bạn là hệ thống sinh bài luyện tập tiếng Anh cho học viên Việt Nam trình "
+    "độ A1–A2. Chỉ trả về JSON thuần (không markdown, không giải thích thêm) "
+    "theo đúng cấu trúc: {\"exercises\": [{\"type\": \"MULTIPLE_CHOICE\" hoặc "
+    "\"FILL_BLANK\", \"question\": \"...\", \"options\": [4 lựa chọn — chỉ với "
+    "MULTIPLE_CHOICE], \"correct_answer\": \"...\", \"explanation\": \"giải "
+    "thích ngắn bằng tiếng Việt\"}]}."
+)
+
+
+def _weak_lesson_ids(user, limit=3) -> list[int]:
+    """Bài học user yếu nhất: thẻ ôn sắp đến hạn nhất + attempt sai gần nhất."""
+    ordered: list[int] = []
+
+    def _add(lesson_id):
+        if lesson_id and lesson_id not in ordered:
+            ordered.append(lesson_id)
+
+    cards = (ReviewCard.query.filter_by(user_id=user.id)
+             .order_by(ReviewCard.next_review_at.asc()).limit(10).all())
+    for card in cards:
+        exercise = db.session.get(Exercise, card.exercise_id)
+        if exercise is not None:
+            _add(exercise.lesson_id)
+    wrong = (Attempt.query.filter_by(user_id=user.id, is_correct=False)
+             .order_by(Attempt.created_at.desc(), Attempt.id.desc()).limit(10).all())
+    for attempt in wrong:
+        exercise = db.session.get(Exercise, attempt.exercise_id)
+        if exercise is not None:
+            _add(exercise.lesson_id)
+    return ordered[:limit]
+
+
+def _bank_exercises(user, weak_lesson_ids, size=PRACTICE_SET_SIZE) -> list[dict]:
+    """Fallback: lấy bài tập thật từ DB — bài yếu trước, rồi bài đã học, rồi bất kỳ."""
+    picked: list[Exercise] = []
+    seen: set[int] = set()
+
+    def _take(exercises):
+        for ex in exercises:
+            if len(picked) >= size:
+                return
+            if ex.id not in seen:
+                seen.add(ex.id)
+                picked.append(ex)
+
+    if weak_lesson_ids:
+        _take(Exercise.query.filter(Exercise.lesson_id.in_(weak_lesson_ids))
+              .order_by(Exercise.id).all())
+    if len(picked) < size:
+        attempted_lesson_ids = [
+            row[0] for row in
+            db.session.query(Exercise.lesson_id)
+            .join(Attempt, Attempt.exercise_id == Exercise.id)
+            .filter(Attempt.user_id == user.id).distinct().all()
+        ]
+        if attempted_lesson_ids:
+            _take(Exercise.query.filter(Exercise.lesson_id.in_(attempted_lesson_ids))
+                  .order_by(Exercise.id).all())
+    if len(picked) < size:
+        _take(Exercise.query.order_by(Exercise.id).all())
+
+    result = []
+    for idx, ex in enumerate(picked):
+        item = {"id": idx + 1, "type": ex.type, "question": ex.question,
+                "correct_answer": ex.correct_answer,
+                "explanation": ex.explanation or ""}
+        if ex.options:
+            item["options"] = ex.options
+        result.append(item)
+    return result
+
+
+def _extract_json_object(text):
+    """Lấy object JSON từ câu trả lời của AI (chịu được markdown fence)."""
+    if not text:
+        return None
+    cleaned = re.sub(r"```(?:json)?", "", str(text)).strip()
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else None
+    except ValueError:
+        pass
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            return None
+    return None
+
+
+def _validate_ai_exercises(data, size=PRACTICE_SET_SIZE):
+    """Validate chặt output AI; không đủ câu hợp lệ thì trả None (fallback)."""
+    if not isinstance(data, dict) or not isinstance(data.get("exercises"), list):
+        return None
+    valid = []
+    for raw in data["exercises"]:
+        if not isinstance(raw, dict):
+            continue
+        ex_type = str(raw.get("type") or "").strip().upper()
+        question = str(raw.get("question") or "").strip()
+        answer = str(raw.get("correct_answer") or "").strip()
+        if ex_type not in ("MULTIPLE_CHOICE", "FILL_BLANK") or not question or not answer:
+            continue
+        item = {"type": ex_type, "question": question, "correct_answer": answer,
+                "explanation": str(raw.get("explanation") or "").strip()}
+        if ex_type == "MULTIPLE_CHOICE":
+            options = raw.get("options")
+            if (not isinstance(options, list) or len(options) < 2
+                    or any(not isinstance(o, str) or not o.strip() for o in options)):
+                continue
+            options = [o.strip() for o in options]
+            # Đáp án phải chọn được trong danh sách lựa chọn.
+            if not any(_normalize_answer(o) == _normalize_answer(answer) for o in options):
+                continue
+            item["options"] = options
+        valid.append(item)
+    if len(valid) < size:
+        return None
+    return [dict(item, id=idx + 1) for idx, item in enumerate(valid[:size])]
+
+
+def _ai_exercises(service, lessons):
+    """Nhờ provider thật sinh bộ bài bám các bài học yếu; None nếu không dùng được."""
+    material = []
+    for lesson in lessons:
+        lines = [f'Bài học "{lesson.title}": {lesson.description or ""}']
+        for ex in lesson.exercises[:4]:
+            lines.append(f"- ({ex.type}) {ex.question} → đáp án: {ex.correct_answer}")
+        material.append("\n".join(lines))
+    prompt = (
+        f"Hãy sinh đúng {PRACTICE_SET_SIZE} câu luyện tập MỚI (không sao chép "
+        "nguyên văn các câu mẫu) bám sát nội dung các bài học sau, hỗn hợp "
+        "MULTIPLE_CHOICE (4 lựa chọn) và FILL_BLANK:\n\n" + "\n\n".join(material)
+    )
+    raw = service.chat([{"role": "user", "content": prompt}], PRACTICE_SYSTEM)
+    return _validate_ai_exercises(_extract_json_object(raw))
+
+
+@ai_bp.post("/practice/generate")
+@jwt_required()
+@limiter.limit(_daily_limit)
+def practice_generate():
+    """Tạo (hoặc trả lại) bộ bài luyện tập AI của user trong ngày hôm nay."""
+    user = current_user()
+    if not user:
+        return fail("Phiên đăng nhập không hợp lệ", 401)
+    today = date.today()
+    existing = (AiPracticeSet.query.filter_by(user_id=user.id, set_date=today)
+                .order_by(AiPracticeSet.id.desc()).first())
+    if existing is not None:
+        return ok({"set_id": existing.id, "generated_by": existing.generated_by,
+                   "exercises": existing.public_exercises()})
+
+    weak_ids = _weak_lesson_ids(user)
+    lessons = [lesson for lesson in
+               (db.session.get(Lesson, lid) for lid in weak_ids) if lesson]
+    service = AiService()
+    exercises, generated_by = None, "bank"
+    if lessons and not service.is_stub:
+        try:
+            exercises = _ai_exercises(service, lessons)
+        except AiProviderError:
+            logger.warning("AI sinh bài luyện tập thất bại — dùng ngân hàng câu hỏi")
+            exercises = None
+        if exercises:
+            generated_by = "ai"
+    if not exercises:
+        exercises = _bank_exercises(user, weak_ids)
+
+    practice_set = AiPracticeSet(
+        user_id=user.id, set_date=today,
+        payload=json.dumps({"generated_by": generated_by, "exercises": exercises},
+                           ensure_ascii=False),
+    )
+    db.session.add(practice_set)
+    db.session.commit()
+    return ok({"set_id": practice_set.id, "generated_by": generated_by,
+               "exercises": practice_set.public_exercises()})
+
+
+@ai_bp.post("/practice/submit")
+@jwt_required()
+def practice_submit():
+    """Chấm bộ bài luyện tập: 4 XP/câu đúng (tối đa 20 XP), chỉ chấm một lần."""
+    user = current_user()
+    if not user:
+        return fail("Phiên đăng nhập không hợp lệ", 401)
+    body = request.get_json(silent=True) or {}
+    try:
+        set_id = int(body.get("set_id"))
+    except (TypeError, ValueError):
+        return fail("Không tìm thấy bộ bài luyện tập", 404)
+    practice_set = (AiPracticeSet.query.filter_by(id=set_id, user_id=user.id).first())
+    if practice_set is None:
+        return fail("Không tìm thấy bộ bài luyện tập", 404)
+    if practice_set.graded:
+        return fail("Bộ bài luyện tập này đã được chấm rồi", 409)
+    answers = body.get("answers")
+    if answers is None:
+        answers = {}
+    if not isinstance(answers, dict):
+        return fail("Trường 'answers' phải là object {exercise_id: đáp án}")
+
+    details, correct = [], 0
+    for ex in practice_set.exercises():
+        submitted = str(answers.get(str(ex.get("id")), answers.get(ex.get("id"), "")))
+        is_correct = _normalize_answer(submitted) == _normalize_answer(ex.get("correct_answer"))
+        correct += int(is_correct)
+        details.append({
+            "exercise_id": ex.get("id"), "is_correct": is_correct,
+            "correct_answer": ex.get("correct_answer"),
+            "explanation": ex.get("explanation") or "",
+        })
+    xp_awarded = PRACTICE_XP_PER_CORRECT * correct
+    practice_set.graded = True
+    practice_set.xp_awarded = xp_awarded
+    user.xp = (user.xp or 0) + xp_awarded
+    db.session.commit()
+    return ok({"set_id": practice_set.id, "correct": correct,
+               "total": len(details), "xp_awarded": xp_awarded,
+               "details": details})
 
 
 @ai_bp.get("/sessions/<int:session_id>")
