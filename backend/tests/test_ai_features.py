@@ -224,3 +224,12 @@ def test_weekly_report_admin_ok(client, admin_headers, practice_content):
 def test_weekly_report_forbidden_for_learner(client, learner_headers):
     resp = client.post("/api/admin/ai/weekly-report", headers=learner_headers)
     assert resp.status_code == 403
+
+
+def test_generate_new_user_without_weak_data_uses_bank_but_not_crash(client, sample_course, learner_headers):
+    """Học viên chưa có điểm yếu: vẫn nhận bộ 5 câu (bank khi AI stub), không 500."""
+    resp = client.post("/api/ai/practice/generate", headers=learner_headers, json={})
+    assert resp.status_code == 200
+    data = resp.get_json()["data"]
+    # Fixture mẫu chỉ có 3 bài tập nên bank trả tối đa 3 (production có 49).
+    assert 1 <= len(data["exercises"]) <= 5

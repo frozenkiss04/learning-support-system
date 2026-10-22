@@ -20,7 +20,7 @@ from sqlalchemy import case, func
 
 from ..extensions import db, limiter
 from ..models.chat import ChatMessage, ChatSession
-from ..models.course import Course
+from ..models.course import Course, Unit
 from ..models.learning import Attempt, Exercise, Lesson, UserProgress
 from ..models.practice import AiPracticeSet
 from ..models.review import ReviewCard
@@ -576,6 +576,15 @@ def practice_generate():
     weak_ids = _weak_lesson_ids(user)
     lessons = [lesson for lesson in
                (db.session.get(Lesson, lid) for lid in weak_ids) if lesson]
+    if not lessons:
+        # Học viên mới chưa có dữ liệu điểm yếu: vẫn sinh bài bằng AI dựa trên
+        # các bài đầu của lộ trình đã xuất bản thay vì bỏ qua AI.
+        lessons = (Lesson.query.join(Unit, Lesson.unit_id == Unit.id)
+                   .join(Course, Unit.course_id == Course.id)
+                   .filter(Course.is_published.is_(True))
+                   .order_by(Course.id, Unit.order_index, Lesson.order_index)
+                   .limit(2).all())
+        weak_ids = [lesson.id for lesson in lessons]
     service = AiService()
     exercises, generated_by = None, "bank"
     if lessons and not service.is_stub:
