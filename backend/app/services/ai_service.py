@@ -161,9 +161,27 @@ class AiService:
         return text
 
     # -- providers -----------------------------------------------------------
+    def _post_with_retry(self, url: str, **kwargs):
+        """POST with a short retry on transient provider errors.
+
+        Gemini's free tier intermittently answers 429/503 in bursts; one or
+        two retries a second apart usually get through, which keeps the
+        callers' fallbacks (question bank, template report) for real outages.
+        """
+        import time
+
+        last_resp = None
+        for attempt in range(3):
+            last_resp = requests.post(url, **kwargs)
+            if last_resp.status_code not in (429, 503):
+                return last_resp
+            if attempt < 2:
+                time.sleep(1.0 if attempt == 0 else 2.5)
+        return last_resp
+
     def _gemini(self, history: list[dict], system: str) -> str:
         # Key goes in a header, never in the URL (URLs end up in logs/proxies).
-        resp = requests.post(
+        resp = self._post_with_retry(
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent",
             json={
@@ -195,7 +213,7 @@ class AiService:
 
     def _openai(self, history: list[dict], system: str) -> str:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        resp = requests.post(
+        resp = self._post_with_retry(
             f"{base_url}/chat/completions",
             json={
                 "model": self.model,
