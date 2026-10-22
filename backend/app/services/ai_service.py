@@ -201,6 +201,38 @@ class AiService:
         return text
 
     # -- providers -----------------------------------------------------------
+    @staticmethod
+    def _body_snippet(resp) -> str:
+        """200 ký tự đầu của body để log chẩn đoán — không bao giờ chứa
+        headers/Authorization/key (chỉ body do provider trả về)."""
+        return (getattr(resp, "text", "") or "")[:200]
+
+    def _raise_for_status(self, resp, provider: str) -> None:
+        """Như ``resp.raise_for_status()`` nhưng log ERROR kèm status + đầu
+        body trước khi HTTPError được ``_convert_errors`` xử lý như cũ —
+        không nuốt lỗi, không đổi loại exception ném ra ngoài."""
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            logger.error(
+                "AI provider %s HTTP error: status=%s body=%s",
+                provider, getattr(resp, "status_code", None),
+                self._body_snippet(resp))
+            raise
+
+    def _parse_json(self, resp, provider: str):
+        """Như ``resp.json()`` nhưng khi body không phải JSON thì log ERROR
+        kèm status + đầu body (để thấy provider thật sự trả về gì, vd trang
+        HTML lỗi) rồi raise AiProviderError thân thiện như hành vi hiện tại."""
+        try:
+            return resp.json()
+        except ValueError:
+            logger.error(
+                "AI provider %s returned non-JSON body: status=%s body=%s",
+                provider, getattr(resp, "status_code", None),
+                self._body_snippet(resp))
+            raise AiProviderError(FRIENDLY_ERROR) from None
+
     def _post_with_retry(self, url: str, **kwargs):
         """POST with a short retry on transient provider errors.
 
@@ -237,8 +269,8 @@ class AiService:
                      "Content-Type": "application/json"},
             timeout=self.timeout,
         )
-        resp.raise_for_status()
-        data = resp.json()
+        self._raise_for_status(resp, "gemini")
+        data = self._parse_json(resp, "gemini")
         candidates = data.get("candidates") or []
         if not candidates:
             # Usually a safety block — promptFeedback explains it, we don't.
@@ -264,8 +296,9 @@ class AiService:
             headers={"Authorization": f"Bearer {self._keys['openai']}"},
             timeout=self.timeout,
         )
-        resp.raise_for_status()
-        text = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        self._raise_for_status(resp, "openai")
+        data = self._parse_json(resp, "openai")
+        text = (data["choices"][0]["message"].get("content") or "").strip()
         if not text:
             raise AiProviderError(FRIENDLY_ERROR)
         return text
