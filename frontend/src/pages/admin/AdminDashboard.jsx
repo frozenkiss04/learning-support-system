@@ -25,6 +25,9 @@ const percentFmt = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
 // Phòng thủ: nếu interceptor của api.js chưa unwrap thì tự lấy .data.
 function unwrap(res) {
   if (res && typeof res === 'object' && 'success' in res && 'data' in res) return res.data;
+  // api.get trả về axios response mà interceptor đã thay .data bằng payload —
+  // cần bóc .data, nếu không stats sẽ là undefined và dashboard hiện toàn 0.
+  if (res && typeof res === 'object' && 'data' in res && 'status' in res) return res.data;
   return res;
 }
 
