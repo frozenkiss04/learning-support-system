@@ -536,7 +536,7 @@ def _validate_ai_exercises(data, size=PRACTICE_SET_SIZE):
                 continue
             item["options"] = options
         valid.append(item)
-    if len(valid) < size:
+    if not valid:
         return None
     return [dict(item, id=idx + 1) for idx, item in enumerate(valid[:size])]
 
@@ -554,8 +554,15 @@ def _ai_exercises(service, lessons):
         "nguyên văn các câu mẫu) bám sát nội dung các bài học sau, hỗn hợp "
         "MULTIPLE_CHOICE (4 lựa chọn) và FILL_BLANK:\n\n" + "\n\n".join(material)
     )
+    # JSON 5 câu + giải thích tiếng Việt dễ vượt ngân sách token mặc định
+    # (1024) khiến JSON bị cắt cụt và không parse được — nới riêng cho lời gọi này.
+    service.max_tokens = 4096
     raw = service.chat([{"role": "user", "content": prompt}], PRACTICE_SYSTEM)
-    return _validate_ai_exercises(_extract_json_object(raw))
+    parsed = _validate_ai_exercises(_extract_json_object(raw))
+    if parsed is None:
+        logger.warning("AI practice output khong hop le (len=%s): %s",
+                       len(raw or ""), (raw or "")[:300])
+    return parsed
 
 
 @ai_bp.post("/practice/generate")
@@ -593,8 +600,20 @@ def practice_generate():
         except AiProviderError:
             logger.warning("AI sinh bài luyện tập thất bại — dùng ngân hàng câu hỏi")
             exercises = None
-        if exercises:
+        if exercises and len(exercises) >= 3:
             generated_by = "ai"
+            if len(exercises) < PRACTICE_SET_SIZE:
+                # AI cho ít câu hợp lệ hơn yêu cầu: bù phần thiếu từ ngân hàng.
+                seen = {item["question"] for item in exercises}
+                for extra in _bank_exercises(user, weak_ids):
+                    if len(exercises) >= PRACTICE_SET_SIZE:
+                        break
+                    if extra["question"] not in seen:
+                        exercises.append(extra)
+                exercises = [dict(item, id=idx + 1)
+                             for idx, item in enumerate(exercises)]
+        else:
+            exercises = None
     if not exercises:
         exercises = _bank_exercises(user, weak_ids)
 
