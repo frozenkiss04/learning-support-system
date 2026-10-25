@@ -8,7 +8,8 @@ the AI tutor then receives the top chunks as grounded context.
 Embedder modes (``embedding_mode()``):
 
 - ``gemini`` — ``GEMINI_API_KEY`` is set: call the Gemini embedding REST API
-  (``text-embedding-004``). Any request failure falls back to the local
+  (``gemini-embedding-001``; model ``text-embedding-004`` trước đây đã bị
+  Google gỡ bỏ — gọi là 404). Any request failure falls back to the local
   embedder for that call so chat never dies because embeddings are down.
 - ``local`` — deterministic hashing vectorizer (256 dims, word 1-2 grams +
   char 3-grams over diacritic-folded text, L2-normalized). No network, no
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 DIM = 256
 GEMINI_EMBED_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
-    "text-embedding-004:embedContent"
+    "gemini-embedding-001:embedContent"
 )
 # Score floors: local hashing vectors are noisier than Gemini's, so the
 # local threshold is lower; both were picked to keep obvious matches and
@@ -66,7 +67,8 @@ def embed(text: str) -> list[float]:
 def _embed_gemini(text: str) -> list[float]:
     resp = requests.post(
         GEMINI_EMBED_URL,
-        params={"key": os.getenv("GEMINI_API_KEY", "").strip()},
+        # Key đi qua header, không để trong URL (URL dễ lọt vào log).
+        headers={"x-goog-api-key": os.getenv("GEMINI_API_KEY", "").strip()},
         json={"content": {"parts": [{"text": text or ""}]}},
         timeout=20,
     )

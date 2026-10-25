@@ -112,6 +112,20 @@ class AiService:
                 and self.provider == "gemini"
                 and bool(self._keys.get("openai")))
 
+    def _fallback_models(self) -> list[str]:
+        """Chuỗi model dự phòng theo thứ tự ưu tiên.
+
+        Model được chỉ định (``AI_FALLBACK_MODEL``) đi trước; slug
+        ``openrouter/free`` là phương án cuối — router tự chọn một model
+        free đang sống khi model chỉ định bị gỡ hoặc hết quota (đổi lại,
+        chất lượng model do router chọn là hên xui nên chỉ dùng sau cùng).
+        """
+        models = []
+        for m in (self.fallback_model, "openrouter/free"):
+            if m and m not in models:
+                models.append(m)
+        return models
+
     # -- public interface --------------------------------------------------
     def chat(self, messages: list[dict], system: str = SYSTEM_TUTOR,
              sources: list[str] | None = None,
@@ -142,19 +156,20 @@ class AiService:
         except AiProviderError as primary_error:
             if not self._fallback_available:
                 raise
-            logger.info(
-                "AI fallback engaged: primary %s failed, trying "
-                "OpenAI-compatible fallback model %s",
-                self.provider, self.fallback_model)
-            try:
-                return self._convert_errors(
-                    self._openai, history, system, model=self.fallback_model,
-                    max_tokens=max_tokens)
-            except AiProviderError:
-                logger.warning(
-                    "AI fallback (model %s) also failed — surfacing the "
-                    "primary provider error", self.fallback_model)
-                raise primary_error from None
+            for fb_model in self._fallback_models():
+                logger.info(
+                    "AI fallback engaged: primary %s failed, trying "
+                    "OpenAI-compatible fallback model %s",
+                    self.provider, fb_model)
+                try:
+                    return self._convert_errors(
+                        self._openai, history, system, model=fb_model,
+                        max_tokens=max_tokens)
+                except AiProviderError:
+                    logger.warning(
+                        "AI fallback (model %s) failed — trying next "
+                        "in chain if any", fb_model)
+            raise primary_error from None
 
     def _convert_errors(self, fn, *args, **kwargs):
         """Gọi một hàm provider, đổi mọi lỗi thành AiProviderError thân thiện."""
@@ -213,14 +228,26 @@ class AiService:
                 raise
         logger.info(
             "AI stream fallback engaged: primary %s failed before first "
-            "delta, trying OpenAI-compatible fallback model %s",
-            self.provider, self.fallback_model)
-        try:
-            yield from self._openai_stream(
-                history, system, max_tokens=max_tokens,
-                model=self.fallback_model)
-        except AiProviderError:
-            raise primary_error from None
+            "delta, trying OpenAI-compatible fallback chain %s",
+            self.provider, self._fallback_models())
+        fb_emitted = False
+        for fb_model in self._fallback_models():
+            try:
+                for delta in self._openai_stream(
+                        history, system, max_tokens=max_tokens,
+                        model=fb_model):
+                    fb_emitted = True
+                    yield delta
+                return
+            except AiProviderError:
+                if fb_emitted:
+                    # Đã phát một phần từ model này — không nối model khác
+                    # vào giữa câu trả lời.
+                    raise
+                logger.warning(
+                    "AI stream fallback (model %s) failed before first "
+                    "delta — trying next in chain if any", fb_model)
+        raise primary_error from None
 
     # -- helpers ------------------------------------------------------------
     @staticmethod

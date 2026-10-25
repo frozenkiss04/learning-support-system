@@ -327,3 +327,41 @@ def test_openai_stream_empty_raises(monkeypatch, calls):
     service = AiService(provider="openai")
     with pytest.raises(AiProviderError):
         "".join(service.stream(MESSAGES))
+
+
+def test_chat_fallback_chain_skips_dead_model(monkeypatch, calls):
+    tried = []
+
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            return FakeResp(503)
+        model = (kwargs.get("json") or {}).get("model")
+        tried.append(model)
+        if model == "dead/model:free":
+            return FakeResp(404)  # model đã bị gỡ khỏi OpenRouter
+        return _openai_ok("roulette trả lời")
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true",
+                       fallback_model="dead/model:free")
+    assert service.chat(MESSAGES) == "roulette trả lời"
+    assert tried == ["dead/model:free", "openrouter/free"]
+
+
+def test_stream_fallback_chain_skips_dead_model(monkeypatch, calls):
+    tried = []
+
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            return FakeStreamResp((), status_code=503)
+        model = (kwargs.get("json") or {}).get("model")
+        tried.append(model)
+        if model == "dead/model:free":
+            return FakeStreamResp((), status_code=404)
+        return FakeStreamResp(_openai_sse("roulette stream"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true",
+                       fallback_model="dead/model:free")
+    assert "".join(service.stream(MESSAGES)) == "roulette stream"
+    assert tried == ["dead/model:free", "openrouter/free"]
