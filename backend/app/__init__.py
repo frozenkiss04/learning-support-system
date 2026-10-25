@@ -1,4 +1,7 @@
 """Application factory."""
+import logging
+import os
+
 from flask import Flask
 
 from .config import Config
@@ -6,6 +9,12 @@ from .extensions import cors, db, jwt, limiter, migrate
 
 
 def create_app(config_object=Config):
+    # Cho phép log INFO của package app (vd thời gian phản hồi AI stream)
+    # hiện trên Render — mặc định root logger ở WARNING sẽ nuốt chúng.
+    logging.getLogger("app").setLevel(
+        getattr(logging, os.getenv("APP_LOG_LEVEL", "INFO").upper(),
+                logging.INFO))
+
     app = Flask(__name__)
     app.config.from_object(config_object)
 

@@ -165,7 +165,7 @@ export default function LessonPage() {
         />
       </div>
 
-      <div className="mx-auto flex w-full max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:px-8">
         {/* Cột chính: nội dung bài */}
         <main className="min-w-0 flex-1">
           <button
@@ -268,7 +268,7 @@ export default function LessonPage() {
           AiPanelPlaceholder — không cần sửa gì thêm ở LessonPage.
           ============================================================
         */}
-        <div className="sticky top-6 hidden h-[calc(100vh-7rem)] w-[360px] shrink-0 lg:block">
+        <div className="h-[540px] w-full shrink-0 lg:sticky lg:top-6 lg:h-[calc(100vh-7rem)] lg:w-[360px]">
           <Suspense fallback={<AiPanelPlaceholder />}>
             <AiTutorPanel lesson={lesson} className="rounded-lg border border-slate-200" />
           </Suspense>

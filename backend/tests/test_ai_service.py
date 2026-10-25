@@ -264,3 +264,66 @@ def test_stub_stream_still_yields_text(monkeypatch):
     service = AiService(provider="stub")
     out = "".join(service.stream(MESSAGES))
     assert "[Chế độ stub" in out
+
+
+def test_stream_forces_utf8_encoding(monkeypatch, calls):
+    captured = {}
+
+    def handler(url, kwargs):
+        resp = FakeStreamResp(_gemini_sse("café ngon"))
+        captured["resp"] = resp
+        return resp
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    assert "".join(service.stream(MESSAGES)) == "café ngon"
+    # requests mặc định giải mã SSE bằng ISO-8859-1 (hỏng tiếng Việt);
+    # code phải ép encoding UTF-8 lên response trước khi đọc.
+    assert captured["resp"].encoding == "utf-8"
+
+
+def test_gemini_stream_empty_fails_over(monkeypatch, calls):
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            # Stream mở thành công nhưng không có nội dung nào (candidates rỗng)
+            return FakeStreamResp(
+                ["data: " + _json.dumps({"candidates": []})])
+        return FakeStreamResp(_openai_sse("phương án dự phòng"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true")
+    assert "".join(service.stream(MESSAGES)) == "phương án dự phòng"
+
+
+def test_gemini_stream_empty_without_fallback_raises(monkeypatch, calls):
+    def handler(url, kwargs):
+        return FakeStreamResp(["data: " + _json.dumps({"candidates": []})])
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)  # fallback tắt
+    with pytest.raises(AiProviderError):
+        "".join(service.stream(MESSAGES))
+
+
+def test_gemini_stream_blocked_raises_blocked_message(monkeypatch, calls):
+    def handler(url, kwargs):
+        return FakeStreamResp(["data: " + _json.dumps(
+            {"promptFeedback": {"blockReason": "SAFETY"}})])
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    with pytest.raises(AiProviderError) as excinfo:
+        "".join(service.stream(MESSAGES))
+    assert "không được nhà cung cấp" in str(excinfo.value)
+
+
+def test_openai_stream_empty_raises(monkeypatch, calls):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
+
+    def handler(url, kwargs):
+        return FakeStreamResp(["data: [DONE]"])
+
+    _install_post(monkeypatch, handler)
+    service = AiService(provider="openai")
+    with pytest.raises(AiProviderError):
+        "".join(service.stream(MESSAGES))

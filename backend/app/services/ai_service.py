@@ -74,6 +74,10 @@ class AiService:
             self.timeout = timeout or float(os.getenv("AI_TIMEOUT_SECONDS", "30"))
         except ValueError:
             self.timeout = 30.0
+        # Đường streaming dùng timeout đọc ngắn hơn: Gemini "treo" không nhả
+        # ký tự nào quá 15 giây thì nên nhường cho failover thay vì bắt
+        # người dùng chờ hết 30 giây.
+        self.stream_timeout = min(self.timeout, 15.0)
         try:
             self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "1024"))
         except ValueError:
@@ -325,6 +329,13 @@ class AiService:
         Bỏ qua dòng trống/không phải data/dữ liệu lỗi định dạng; dừng ở
         ``[DONE]``.
         """
+        # Provider trả text/event-stream thường KHÔNG kèm charset nên
+        # requests mặc định giải mã ISO-8859-1, làm hỏng ký tự UTF-8
+        # ("café" thành "cafÃ©") — ép UTF-8 trước khi đọc.
+        try:
+            resp.encoding = "utf-8"
+        except Exception:
+            pass
         for line in resp.iter_lines(decode_unicode=True):
             if not line:
                 continue
@@ -364,6 +375,15 @@ class AiService:
                        max_tokens: int | None = None,
                        model: str | None = None):
         resp = None
+        state = {"chars": 0, "feedback": None}
+
+        def extract(payload):
+            if payload.get("promptFeedback"):
+                state["feedback"] = payload["promptFeedback"]
+            text = self._gemini_delta(payload)
+            state["chars"] += len(text)
+            return text
+
         try:
             resp = self._open_stream(
                 "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -380,10 +400,21 @@ class AiService:
                 },
                 headers={"x-goog-api-key": self._keys["gemini"],
                          "Content-Type": "application/json"},
-                timeout=self.timeout,
+                timeout=self.stream_timeout,
             )
             self._raise_for_status(resp, "gemini")
-            yield from self._iter_sse_json(resp, self._gemini_delta)
+            yield from self._iter_sse_json(resp, extract)
+            if state["chars"] == 0:
+                # Stream kết thúc mà không có ký tự nào (thường do bị chặn
+                # an toàn): coi là lỗi provider để failover/tầng trên xử lý
+                # thay vì trả về một câu trả lời rỗng im lặng.
+                if state["feedback"]:
+                    logger.warning(
+                        "Gemini stream empty, promptFeedback: %s",
+                        state["feedback"])
+                    raise AiProviderError(FRIENDLY_BLOCKED)
+                logger.warning("Gemini stream completed with no text")
+                raise AiProviderError(FRIENDLY_ERROR)
         except AiProviderError:
             raise
         except requests.RequestException as exc:
@@ -402,6 +433,13 @@ class AiService:
         base_url = os.getenv("OPENAI_BASE_URL",
                              "https://api.openai.com/v1").rstrip("/")
         resp = None
+        state = {"chars": 0}
+
+        def extract(payload):
+            text = self._openai_delta(payload)
+            state["chars"] += len(text)
+            return text
+
         try:
             resp = self._open_stream(
                 f"{base_url}/chat/completions",
@@ -412,10 +450,13 @@ class AiService:
                     "stream": True,
                 },
                 headers={"Authorization": f"Bearer {self._keys['openai']}"},
-                timeout=self.timeout,
+                timeout=self.stream_timeout,
             )
             self._raise_for_status(resp, "openai")
-            yield from self._iter_sse_json(resp, self._openai_delta)
+            yield from self._iter_sse_json(resp, extract)
+            if state["chars"] == 0:
+                logger.warning("OpenAI-compatible stream completed with no text")
+                raise AiProviderError(FRIENDLY_ERROR)
         except AiProviderError:
             raise
         except requests.RequestException as exc:
