@@ -21,6 +21,7 @@ turns that into a 502 instead of a bare 500.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -109,13 +110,16 @@ class AiService:
 
     # -- public interface --------------------------------------------------
     def chat(self, messages: list[dict], system: str = SYSTEM_TUTOR,
-             sources: list[str] | None = None) -> str:
+             sources: list[str] | None = None,
+             max_tokens: int | None = None) -> str:
         """Return the assistant reply for ``messages`` ([{role, content}]).
 
         Stub mode returns a clearly-labelled stub reply. Real provider
         failures raise :class:`AiProviderError` (friendly message).
         ``sources`` (RAG citation titles) only surfaces in stub mode — with a
         real provider the sources are already woven into ``system``.
+        ``max_tokens`` overrides ``AI_MAX_TOKENS`` for this call (vd nhập vai
+        chỉ cần trả lời ngắn).
         """
         history = self._normalize(messages)
         if self.provider not in _SUPPORTED:
@@ -127,8 +131,10 @@ class AiService:
             return self._stub_reply(history, sources)
         try:
             if self.provider == "gemini":
-                return self._convert_errors(self._gemini, history, system)
-            return self._convert_errors(self._openai, history, system)
+                return self._convert_errors(self._gemini, history, system,
+                                            max_tokens=max_tokens)
+            return self._convert_errors(self._openai, history, system,
+                                        max_tokens=max_tokens)
         except AiProviderError as primary_error:
             if not self._fallback_available:
                 raise
@@ -138,7 +144,8 @@ class AiService:
                 self.provider, self.fallback_model)
             try:
                 return self._convert_errors(
-                    self._openai, history, system, model=self.fallback_model)
+                    self._openai, history, system, model=self.fallback_model,
+                    max_tokens=max_tokens)
             except AiProviderError:
                 logger.warning(
                     "AI fallback (model %s) also failed — surfacing the "
@@ -162,16 +169,54 @@ class AiService:
             raise AiProviderError(FRIENDLY_ERROR) from None
 
     def stream(self, messages: list[dict], system: str = SYSTEM_TUTOR,
-               sources: list[str] | None = None):
-        """Yield the reply in small chunks (SSE friendly).
+               sources: list[str] | None = None,
+               max_tokens: int | None = None):
+        """Yield the reply as live provider deltas (SSE friendly).
 
-        The current providers are called non-streaming and the full reply is
-        re-chunked — simple and reliable on Render's free tier. Raises
-        :class:`AiProviderError` exactly like :meth:`chat`.
+        Mở kết nối streaming thật tới provider (Gemini
+        ``streamGenerateContent`` / OpenAI ``stream=true``) nên ký tự đầu
+        tiên tới người dùng gần như ngay khi mô hình bắt đầu sinh — thay
+        cho cách cũ gọi non-streaming rồi cắt nhỏ lại (phải chờ toàn bộ
+        câu trả lời). Failover chỉ kích hoạt khi provider chính lỗi TRƯỚC
+        delta đầu tiên; đã phát một phần mà lỗi thì raise
+        :class:`AiProviderError` giống :meth:`chat`.
         """
-        text = self.chat(messages, system, sources=sources)
-        for chunk in re.findall(r"\S+\s*", text):
-            yield chunk
+        history = self._normalize(messages)
+        if self.provider not in _SUPPORTED:
+            raise AiProviderError(
+                f"Cấu hình AI_PROVIDER '{self.provider}' chưa được hỗ trợ. "
+                "Hãy dùng 'gemini', 'openai' hoặc 'stub'."
+            )
+        if self.is_stub:
+            yield from re.findall(r"\S+\s*", self._stub_reply(history, sources))
+            return
+        if self.provider == "gemini":
+            primary = self._gemini_stream(history, system,
+                                          max_tokens=max_tokens)
+        else:
+            primary = self._openai_stream(history, system,
+                                          max_tokens=max_tokens)
+        emitted = False
+        primary_error = None
+        try:
+            for delta in primary:
+                emitted = True
+                yield delta
+            return
+        except AiProviderError as exc:
+            primary_error = exc
+            if emitted or not self._fallback_available:
+                raise
+        logger.info(
+            "AI stream fallback engaged: primary %s failed before first "
+            "delta, trying OpenAI-compatible fallback model %s",
+            self.provider, self.fallback_model)
+        try:
+            yield from self._openai_stream(
+                history, system, max_tokens=max_tokens,
+                model=self.fallback_model)
+        except AiProviderError:
+            raise primary_error from None
 
     # -- helpers ------------------------------------------------------------
     @staticmethod
@@ -251,7 +296,140 @@ class AiService:
                 time.sleep(1.0 if attempt == 0 else 2.5)
         return last_resp
 
-    def _gemini(self, history: list[dict], system: str) -> str:
+    def _open_stream(self, url: str, **kwargs):
+        """POST mở kết nối streaming (``stream=True``).
+
+        Chỉ thử lại MỘT lần khi gặp 429/503 và chỉ chờ 0,6 giây: trên đường
+        streaming, thời gian tới ký tự đầu tiên là quan trọng nhất nên
+        không dùng chính sách retry dài của :meth:`_post_with_retry` — lỗi
+        dai dẳng được failover xử lý ở tầng trên.
+        """
+        import time
+
+        kwargs["stream"] = True
+        resp = requests.post(url, **kwargs)
+        if resp.status_code in (429, 503):
+            try:
+                resp.close()
+            except Exception:
+                pass
+            time.sleep(0.6)
+            resp = requests.post(url, **kwargs)
+        return resp
+
+    @staticmethod
+    def _iter_sse_json(resp, extract):
+        """Yield phần text từ các sự kiện SSE ``data: {json}`` của resp.
+
+        ``extract(payload) -> str`` lấy text delta tùy định dạng provider.
+        Bỏ qua dòng trống/không phải data/dữ liệu lỗi định dạng; dừng ở
+        ``[DONE]``.
+        """
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if not payload:
+                continue
+            if payload == "[DONE]":
+                break
+            try:
+                data = json.loads(payload)
+            except ValueError:
+                continue
+            text = extract(data)
+            if text:
+                yield text
+
+    @staticmethod
+    def _gemini_delta(payload) -> str:
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            return ""
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        return "".join(p.get("text", "") for p in parts)
+
+    @staticmethod
+    def _openai_delta(payload) -> str:
+        choices = payload.get("choices") or []
+        if not choices:
+            return ""
+        delta = choices[0].get("delta") or {}
+        return delta.get("content") or ""
+
+    def _gemini_stream(self, history: list[dict], system: str,
+                       max_tokens: int | None = None,
+                       model: str | None = None):
+        resp = None
+        try:
+            resp = self._open_stream(
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model or self.model}:streamGenerateContent?alt=sse",
+                json={
+                    "system_instruction": {"parts": [{"text": system}]},
+                    "contents": [
+                        {"role": "model" if m["role"] == "assistant" else "user",
+                         "parts": [{"text": m["content"]}]}
+                        for m in history
+                    ],
+                    "generationConfig": {
+                        "maxOutputTokens": max_tokens or self.max_tokens},
+                },
+                headers={"x-goog-api-key": self._keys["gemini"],
+                         "Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+            self._raise_for_status(resp, "gemini")
+            yield from self._iter_sse_json(resp, self._gemini_delta)
+        except AiProviderError:
+            raise
+        except requests.RequestException as exc:
+            logger.warning("AI provider gemini stream failed: %s", exc)
+            raise AiProviderError(FRIENDLY_ERROR) from None
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
+    def _openai_stream(self, history: list[dict], system: str,
+                       max_tokens: int | None = None,
+                       model: str | None = None):
+        base_url = os.getenv("OPENAI_BASE_URL",
+                             "https://api.openai.com/v1").rstrip("/")
+        resp = None
+        try:
+            resp = self._open_stream(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model or self.model,
+                    "messages": [{"role": "system", "content": system}] + history,
+                    "max_tokens": max_tokens or self.max_tokens,
+                    "stream": True,
+                },
+                headers={"Authorization": f"Bearer {self._keys['openai']}"},
+                timeout=self.timeout,
+            )
+            self._raise_for_status(resp, "openai")
+            yield from self._iter_sse_json(resp, self._openai_delta)
+        except AiProviderError:
+            raise
+        except requests.RequestException as exc:
+            logger.warning("AI provider openai stream failed: %s", exc)
+            raise AiProviderError(FRIENDLY_ERROR) from None
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
+    def _gemini(self, history: list[dict], system: str,
+                max_tokens: int | None = None) -> str:
         # Key goes in a header, never in the URL (URLs end up in logs/proxies).
         resp = self._post_with_retry(
             "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -263,7 +441,8 @@ class AiService:
                      "parts": [{"text": m["content"]}]}
                     for m in history
                 ],
-                "generationConfig": {"maxOutputTokens": self.max_tokens},
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens or self.max_tokens},
             },
             headers={"x-goog-api-key": self._keys["gemini"],
                      "Content-Type": "application/json"},
@@ -284,14 +463,15 @@ class AiService:
         return text
 
     def _openai(self, history: list[dict], system: str,
-                model: str | None = None) -> str:
+                model: str | None = None,
+                max_tokens: int | None = None) -> str:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         resp = self._post_with_retry(
             f"{base_url}/chat/completions",
             json={
                 "model": model or self.model,
                 "messages": [{"role": "system", "content": system}] + history,
-                "max_tokens": self.max_tokens,
+                "max_tokens": max_tokens or self.max_tokens,
             },
             headers={"Authorization": f"Bearer {self._keys['openai']}"},
             timeout=self.timeout,

@@ -331,8 +331,10 @@ def chat():
     if rag_extra:
         system = system + "\n\n" + rag_extra
     service = AiService()
+    max_tokens = 400 if session.context_type == "ROLEPLAY" else None
     try:
-        reply = service.chat(history, system, sources=rag_titles)
+        reply = service.chat(history, system, sources=rag_titles,
+                             max_tokens=max_tokens)
     except AiProviderError as exc:
         # Tin nhắn user đã lưu; không lưu "trả lời" giả khi provider lỗi.
         return fail(str(exc), 502, code="AI_PROVIDER_ERROR")
@@ -354,6 +356,7 @@ def chat_stream():
     """SSE variant used by the learner AI panel (dùng chung cho cả ADMIN).
 
     Events: ``{"type": "meta", "session_id": ...}`` →
+    ``{"type": "sources", "sources": [...]}`` (khi có RAG) →
     ``{"type": "delta", "delta": "..."}`` * n →
     ``{"type": "error", "message": "..."}`` khi provider lỗi, cuối là
     ``data: [DONE]``.
@@ -367,26 +370,45 @@ def chat_stream():
         return error
     service = AiService()
     history = _history(session)
-    rag_extra, rag_titles = _rag_context(session, history)
-    if rag_extra:
-        system = system + "\n\n" + rag_extra
     session_id = session.id
+    max_tokens = 400 if session.context_type == "ROLEPLAY" else None
 
     @stream_with_context
     def generate():
-        yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id})}\n\n"
+        import time
+
+        started = time.monotonic()
+        yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id, 'provider': service.provider, 'stub': service.is_stub})}\n\n"
+        # RAG chạy bên trong generator (sau khi meta đã gửi) để giao diện
+        # hiện trạng thái trả lời ngay, không phải chờ embedding xong mới
+        # nhận được byte đầu tiên.
+        rag_extra, rag_titles = _rag_context(session, history)
+        full_system = system + ("\n\n" + rag_extra if rag_extra else "")
+        if rag_titles:
+            yield f"data: {json.dumps({'type': 'sources', 'sources': rag_titles}, ensure_ascii=False)}\n\n"
         parts = []
+        first_delta_at = None
         try:
-            for chunk in service.stream(history, system, sources=rag_titles):
+            for chunk in service.stream(history, full_system,
+                                         sources=rag_titles,
+                                         max_tokens=max_tokens):
+                if first_delta_at is None:
+                    first_delta_at = time.monotonic()
                 parts.append(chunk)
-                yield f"data: {json.dumps({'type': 'delta', 'delta': chunk})}\n\n"
+                yield f"data: {json.dumps({'type': 'delta', 'delta': chunk}, ensure_ascii=False)}\n\n"
         except AiProviderError as exc:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             return
         content = "".join(parts).strip()
         if content:
             _save_assistant(session, content)
+        logger.info(
+            "ai stream done: ctx=%s ttft=%s total=%.2fs chars=%d",
+            session.context_type,
+            (f"{first_delta_at - started:.2f}s"
+             if first_delta_at is not None else "n/a"),
+            time.monotonic() - started, len(content))
         yield "data: [DONE]\n\n"
 
     return Response(generate(), mimetype="text/event-stream",

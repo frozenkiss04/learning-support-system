@@ -39,9 +39,11 @@ api.interceptors.request.use((config) => {
 });
 
 // ---- Refresh: single-flight, at most one retry per request -------------------
-let refreshPromise = null;
+// (export để luồng fetch streaming trong lib/aiStream.js dùng chung cơ chế
+// làm mới token khi gặp 401, thay vì tự chế một bản sao.)
+export let refreshPromise = null;
 
-async function refreshAccessToken() {
+export async function refreshAccessToken() {
   const { refreshToken, setTokens, logout } = useAuthStore.getState();
   if (!refreshToken) throw new Error("No refresh token");
 

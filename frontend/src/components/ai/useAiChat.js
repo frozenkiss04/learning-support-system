@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import api from "../../lib/api";
+import { streamAiChat } from "../../lib/aiStream";
 
 /**
  * Câu hỏi gợi ý hiển thị dạng text link trong panel (trạng thái trống).
@@ -11,22 +11,11 @@ export const SUGGESTED_QUESTIONS = [
   "Tạo 3 câu luyện tập",
 ];
 
-/**
- * Bóc payload từ response của api client.
- * Backend trả envelope { success, data: { session_id, reply } };
- * hàm này chịu được cả trường hợp api.js đã unwrap sẵn data.
- */
-function unwrapResponse(res) {
-  const body = res?.data ?? res ?? {};
-  return body?.data ?? body;
-}
-
-function extractErrorMessage(err) {
-  return (
-    err?.response?.data?.error?.message ||
-    err?.message ||
-    "Không gửi được tin nhắn. Vui lòng thử lại."
-  );
+function streamErrorMessage(err) {
+  if (err instanceof TypeError) {
+    return "Không kết nối được tới máy chủ. Vui lòng kiểm tra mạng và thử lại.";
+  }
+  return err?.message || "Không gửi được tin nhắn. Vui lòng thử lại.";
 }
 
 /**
@@ -43,9 +32,10 @@ function extractErrorMessage(err) {
  *   reset: () => void,
  * }}
  *
- * - Gọi POST /api/ai/chat với { message, context_type: "LESSON",
- *   context_id: lessonId, session_id } và lưu session_id backend trả về
- *   vào state để các tin nhắn sau đi chung một phiên.
+ * - Gọi POST /api/ai/chat/stream (SSE) với { message, context_type:
+ *   "LESSON", context_id: lessonId, session_id }; câu trả lời được chèn
+ *   dần theo từng delta nên người học thấy chữ chạy ngay, và session_id
+ *   backend trả về (sự kiện meta) được lưu để các tin sau đi chung phiên.
  * - Đổi lessonId sẽ tự reset hội thoại + session.
  */
 export function useAiChat(lessonId) {
@@ -77,6 +67,57 @@ export function useAiChat(lessonId) {
     reset();
   }, [lessonId, reset]);
 
+  /** Chạy một lượt stream cho `text`; bong bóng assistant hiện khi delta
+   * đầu tiên tới (trước đó panel hiển thị trạng thái "đang trả lời"). */
+  const runStream = useCallback(
+    async (text) => {
+      const assistantId = nextId();
+      let inserted = false;
+      const upsertAssistant = (content) => {
+        if (!inserted) {
+          inserted = true;
+          setMessages((prev) => [
+            ...prev,
+            { id: assistantId, role: "assistant", content },
+          ]);
+        } else {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content } : m,
+            ),
+          );
+        }
+      };
+      try {
+        const { full } = await streamAiChat({
+          body: {
+            message: text,
+            context_type: "LESSON",
+            context_id: lessonId,
+            session_id: sessionIdRef.current ?? undefined,
+          },
+          onMeta: (evt) => {
+            if (evt?.session_id != null) {
+              sessionIdRef.current = evt.session_id;
+              setSessionId(evt.session_id);
+            }
+          },
+          onDelta: (_delta, fullText) => upsertAssistant(fullText),
+        });
+        if (!inserted || !full.trim()) {
+          upsertAssistant(
+            (full || "").trim() || "Chưa nhận được nội dung trả lời.",
+          );
+        }
+      } catch (err) {
+        // Chưa có chữ nào thì giữ hành vi cũ: chỉ báo lỗi (có nút thử lại).
+        // Đã có một phần nội dung thì giữ lại phần đó kèm thông báo lỗi.
+        setError(streamErrorMessage(err));
+      }
+    },
+    [lessonId, nextId],
+  );
+
   const sendMessage = useCallback(
     async (rawText) => {
       const text = (rawText ?? "").trim();
@@ -89,72 +130,27 @@ export function useAiChat(lessonId) {
         { id: nextId(), role: "user", content: text },
       ]);
       setIsSending(true);
-
       try {
-        const res = await api.post("/api/ai/chat", {
-          message: text,
-          context_type: "LESSON",
-          context_id: lessonId,
-          session_id: sessionIdRef.current ?? undefined,
-        });
-        const payload = unwrapResponse(res);
-
-        if (payload?.session_id != null) {
-          sessionIdRef.current = payload.session_id;
-          setSessionId(payload.session_id);
-        }
-        const reply = (payload?.reply ?? "").trim();
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextId(),
-            role: "assistant",
-            content: reply || "Chưa nhận được nội dung trả lời.",
-          },
-        ]);
-      } catch (err) {
-        setError(extractErrorMessage(err));
+        await runStream(text);
       } finally {
         setIsSending(false);
       }
     },
-    [lessonId, isSending, nextId],
+    [lessonId, isSending, nextId, runStream],
   );
 
   /** Gửi lại tin nhắn user gần nhất (dùng cho nút "Thử lại" khi lỗi). */
   const retryLast = useCallback(async () => {
     const text = lastUserTextRef.current;
     if (!text || isSending) return;
-    // Tin nhắn user đã nằm trong danh sách (gửi lần đầu lỗi), chỉ gọi lại API.
     setError(null);
     setIsSending(true);
     try {
-      const res = await api.post("/api/ai/chat", {
-        message: text,
-        context_type: "LESSON",
-        context_id: lessonId,
-        session_id: sessionIdRef.current ?? undefined,
-      });
-      const payload = unwrapResponse(res);
-      if (payload?.session_id != null) {
-        sessionIdRef.current = payload.session_id;
-        setSessionId(payload.session_id);
-      }
-      const reply = (payload?.reply ?? "").trim();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          role: "assistant",
-          content: reply || "Chưa nhận được nội dung trả lời.",
-        },
-      ]);
-    } catch (err) {
-      setError(extractErrorMessage(err));
+      await runStream(text);
     } finally {
       setIsSending(false);
     }
-  }, [lessonId, isSending, nextId]);
+  }, [isSending, runStream]);
 
   return { messages, sessionId, isSending, error, sendMessage, retryLast, reset };
 }

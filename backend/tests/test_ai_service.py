@@ -130,3 +130,137 @@ def test_gemini_ok_first_try_never_touches_fallback(monkeypatch, calls):
 
     assert service.chat(MESSAGES) == "câu trả lời gemini"
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Streaming thật (SSE): delta sống từ provider, failover trước delta đầu
+# ---------------------------------------------------------------------------
+import json as _json
+
+
+class FakeStreamResp:
+    """Resp cho đường streaming: có status_code/raise_for_status/close và
+    iter_lines; `lines` có thể là generator để mô phỏng lỗi giữa chừng."""
+
+    def __init__(self, lines=(), status_code=200):
+        self.status_code = status_code
+        self._lines = lines
+        self.text = ""
+        self.closed = False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Server Error")
+
+    def iter_lines(self, decode_unicode=True):
+        yield from self._lines
+
+    def close(self):
+        self.closed = True
+
+
+def _gemini_sse(*texts):
+    return [
+        "data: " + _json.dumps(
+            {"candidates": [{"content": {"parts": [{"text": t}]}}]})
+        for t in texts
+    ]
+
+
+def _openai_sse(*texts):
+    lines = [
+        "data: " + _json.dumps({"choices": [{"delta": {"content": t}}]})
+        for t in texts
+    ]
+    lines.append("data: [DONE]")
+    return lines
+
+
+def test_gemini_stream_yields_live_deltas(monkeypatch, calls):
+    seen = {}
+
+    def handler(url, kwargs):
+        seen["url"] = url
+        seen["kwargs"] = kwargs
+        return FakeStreamResp(_gemini_sse("Xin ", "chào ", "bạn"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    out = "".join(service.stream(MESSAGES))
+    assert out == "Xin chào bạn"
+    assert ":streamGenerateContent?alt=sse" in seen["url"]
+    assert seen["kwargs"].get("stream") is True
+
+
+def test_gemini_stream_max_tokens_override(monkeypatch, calls):
+    seen = {}
+
+    def handler(url, kwargs):
+        seen["json"] = kwargs.get("json") or {}
+        return FakeStreamResp(_gemini_sse("ok"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    assert "".join(service.stream(MESSAGES, max_tokens=400)) == "ok"
+    assert seen["json"]["generationConfig"]["maxOutputTokens"] == 400
+
+
+def test_stream_fails_over_before_first_delta(monkeypatch, calls):
+    counts = {"gemini": 0, "openai": 0}
+
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            counts["gemini"] += 1
+            return FakeStreamResp((), status_code=503)
+        counts["openai"] += 1
+        return FakeStreamResp(_openai_sse("trả lời dự phòng"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true")
+    out = "".join(service.stream(MESSAGES))
+    assert out == "trả lời dự phòng"
+    # 1 lần gọi đầu + 1 lần thử lại ngắn của _open_stream, rồi failover.
+    assert counts["gemini"] == 2
+    assert counts["openai"] == 1
+
+
+def test_stream_no_failover_after_first_delta(monkeypatch, calls):
+    counts = {"openai": 0}
+
+    def broken_lines():
+        yield _gemini_sse("một phần ")[0]
+        raise requests.ConnectionError("mất kết nối giữa chừng")
+
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            return FakeStreamResp(broken_lines())
+        counts["openai"] += 1
+        return FakeStreamResp(_openai_sse("không được dùng"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true")
+    gen = service.stream(MESSAGES)
+    assert next(gen) == "một phần "
+    with pytest.raises(AiProviderError):
+        next(gen)
+    assert counts["openai"] == 0
+
+
+def test_openai_primary_stream(monkeypatch, calls):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
+    monkeypatch.delenv("AI_FALLBACK_ENABLED", raising=False)
+
+    def handler(url, kwargs):
+        assert kwargs.get("stream") is True
+        assert (kwargs.get("json") or {}).get("stream") is True
+        return FakeStreamResp(_openai_sse("Hello ", "there"))
+
+    _install_post(monkeypatch, handler)
+    service = AiService(provider="openai")
+    assert "".join(service.stream(MESSAGES)) == "Hello there"
+
+
+def test_stub_stream_still_yields_text(monkeypatch):
+    service = AiService(provider="stub")
+    out = "".join(service.stream(MESSAGES))
+    assert "[Chế độ stub" in out

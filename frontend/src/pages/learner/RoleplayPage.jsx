@@ -9,15 +9,16 @@ import {
   Send,
 } from "lucide-react";
 
-import { apiPost } from "../../lib/api";
+import { streamAiChat } from "../../lib/aiStream";
 import ChatMessage from "../../components/ai/ChatMessage";
 
 /**
  * Nhập vai cùng AI (roleplay) — luyện hội thoại tiếng Anh theo tình huống.
  *
- * API: POST /api/ai/chat với { message, context_type: "ROLEPLAY",
- * scenario, session_id } -> payload { reply, session_id }. session_id backend
- * trả về được giữ trong state để các tin nhắn sau nối tiếp cùng một phiên.
+ * API: POST /api/ai/chat/stream (SSE) với { message, context_type:
+ * "ROLEPLAY", scenario, session_id }; câu trả lời chạy chữ trực tiếp theo
+ * từng delta, session_id backend trả về được giữ trong state để các tin
+ * nhắn sau nối tiếp cùng một phiên.
  * Người dùng nhắn trước; phía client chỉ hiện sẵn một bong bóng gợi ý mở đầu.
  */
 
@@ -119,29 +120,49 @@ export default function RoleplayPage() {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", content: text }]);
     setIsSending(true);
 
-    try {
-      const res = await apiPost("/api/ai/chat", {
-        message: text,
-        context_type: "ROLEPLAY",
-        scenario: scenario.key,
-        session_id: sessionIdRef.current ?? undefined,
-      });
-      const payload = res?.data ?? res ?? {};
-      if (payload?.session_id != null) {
-        sessionIdRef.current = payload.session_id;
-        setSessionId(payload.session_id);
+    const assistantId = nextId();
+    let inserted = false;
+    const upsertAssistant = (content) => {
+      if (!inserted) {
+        inserted = true;
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId, role: "assistant", content },
+        ]);
+      } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
+        );
       }
-      const reply = (payload?.reply ?? "").trim();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          role: "assistant",
-          content: reply || "Chưa nhận được nội dung trả lời.",
+    };
+
+    try {
+      const { full } = await streamAiChat({
+        body: {
+          message: text,
+          context_type: "ROLEPLAY",
+          scenario: scenario.key,
+          session_id: sessionIdRef.current ?? undefined,
         },
-      ]);
+        onMeta: (evt) => {
+          if (evt?.session_id != null) {
+            sessionIdRef.current = evt.session_id;
+            setSessionId(evt.session_id);
+          }
+        },
+        onDelta: (_delta, fullText) => upsertAssistant(fullText),
+      });
+      if (!inserted || !full.trim()) {
+        upsertAssistant(
+          (full || "").trim() || "Chưa nhận được nội dung trả lời.",
+        );
+      }
     } catch (err) {
-      setError(extractErrorMessage(err));
+      setError(
+        err instanceof TypeError
+          ? "Không kết nối được tới máy chủ. Vui lòng kiểm tra mạng và thử lại."
+          : err?.message || extractErrorMessage(err),
+      );
     } finally {
       setIsSending(false);
     }

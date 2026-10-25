@@ -11,6 +11,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import api, { apiGet, apiPost } from "../../lib/api";
+import { streamAiChat } from "../../lib/aiStream";
 
 /**
  * Trợ lý AI quản lý (admin/teacher).
@@ -202,6 +203,7 @@ export default function AdminAiAssistant() {
   const [error, setError] = useState("");
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  const msgIdRef = useRef(0);
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -247,25 +249,47 @@ export default function AdminAiAssistant() {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setSending(true);
-    try {
-      const res = await api.post("/api/ai/chat", {
-        message: text,
-        context_type: "ADMIN",
-        session_id: activeSessionId ?? undefined,
-      });
-      const data = res && !Array.isArray(res) && "reply" in res ? res : res?.data ?? res;
-      if (data?.session_id && data.session_id !== activeSessionId) {
-        setActiveSessionId(data.session_id);
-        setResumedSession(null);
-        loadSessions();
+
+    const assistantId = `admin-ai-${++msgIdRef.current}`;
+    let inserted = false;
+    const upsertAssistant = (content) => {
+      if (!inserted) {
+        inserted = true;
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId, role: "assistant", content },
+        ]);
+      } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content } : m)),
+        );
       }
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data?.reply || "Trợ lý chưa trả về nội dung." },
-      ]);
+    };
+
+    try {
+      const { full } = await streamAiChat({
+        body: {
+          message: text,
+          context_type: "ADMIN",
+          session_id: activeSessionId ?? undefined,
+        },
+        onMeta: (evt) => {
+          if (evt?.session_id && evt.session_id !== activeSessionId) {
+            setActiveSessionId(evt.session_id);
+            setResumedSession(null);
+            loadSessions();
+          }
+        },
+        onDelta: (_delta, fullText) => upsertAssistant(fullText),
+      });
+      if (!inserted || !full.trim()) {
+        upsertAssistant(
+          (full || "").trim() || "Trợ lý chưa trả về nội dung.",
+        );
+      }
     } catch (err) {
       setError(
-        err?.response?.data?.error?.message ||
+        err?.message ||
           "Không gửi được câu hỏi. Trợ lý quản lý chỉ dành cho tài khoản ADMIN/TEACHER, vui lòng kiểm tra lại quyền truy cập."
       );
     } finally {
