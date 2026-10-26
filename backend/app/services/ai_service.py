@@ -115,13 +115,15 @@ class AiService:
     def _fallback_models(self) -> list[str]:
         """Chuỗi model dự phòng theo thứ tự ưu tiên.
 
-        Model được chỉ định (``AI_FALLBACK_MODEL``) đi trước; slug
-        ``openrouter/free`` là phương án cuối — router tự chọn một model
-        free đang sống khi model chỉ định bị gỡ hoặc hết quota (đổi lại,
-        chất lượng model do router chọn là hên xui nên chỉ dùng sau cùng).
+        Model được chỉ định (``AI_FALLBACK_MODEL``) đi trước, tiếp theo là
+        một model free danh tiếng khác (Gemma) phòng khi model đầu bị gỡ
+        hoặc hết quota free, và cuối cùng là slug ``openrouter/free`` —
+        router tự chọn một model free đang sống (đổi lại chất lượng model
+        do router chọn là hên xui nên chỉ dùng sau cùng).
         """
         models = []
-        for m in (self.fallback_model, "openrouter/free"):
+        for m in (self.fallback_model, "google/gemma-4-31b-it:free",
+                  "openrouter/free"):
             if m and m not in models:
                 models.append(m)
         return models

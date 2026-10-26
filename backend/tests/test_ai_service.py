@@ -345,7 +345,7 @@ def test_chat_fallback_chain_skips_dead_model(monkeypatch, calls):
     service = _service(monkeypatch, fallback="true",
                        fallback_model="dead/model:free")
     assert service.chat(MESSAGES) == "roulette trả lời"
-    assert tried == ["dead/model:free", "openrouter/free"]
+    assert tried == ["dead/model:free", "google/gemma-4-31b-it:free"]
 
 
 def test_stream_fallback_chain_skips_dead_model(monkeypatch, calls):
@@ -364,4 +364,24 @@ def test_stream_fallback_chain_skips_dead_model(monkeypatch, calls):
     service = _service(monkeypatch, fallback="true",
                        fallback_model="dead/model:free")
     assert "".join(service.stream(MESSAGES)) == "roulette stream"
-    assert tried == ["dead/model:free", "openrouter/free"]
+    assert tried == ["dead/model:free", "google/gemma-4-31b-it:free"]
+
+
+def test_chat_fallback_chain_reaches_roulette_last(monkeypatch, calls):
+    tried = []
+
+    def handler(url, kwargs):
+        if "generativelanguage" in url:
+            return FakeResp(503)
+        model = (kwargs.get("json") or {}).get("model")
+        tried.append(model)
+        if model == "openrouter/free":
+            return _openai_ok("roulette cứu cánh")
+        return FakeResp(404)  # cả model chỉ định lẫn Gemma đều chết
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true",
+                       fallback_model="dead/model:free")
+    assert service.chat(MESSAGES) == "roulette cứu cánh"
+    assert tried == ["dead/model:free", "google/gemma-4-31b-it:free",
+                     "openrouter/free"]

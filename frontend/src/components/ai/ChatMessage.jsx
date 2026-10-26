@@ -36,9 +36,16 @@ export default function ChatMessage({ message, role, content }) {
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
           </span>
         ) : (
-          <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
-            {msgContent}
-          </p>
+          <>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-800">
+              {msgContent}
+            </p>
+            {Array.isArray(message?.sources) && message.sources.length > 0 && (
+              <p className="mt-1.5 border-t border-slate-100 pt-1.5 text-xs text-slate-500">
+                Nguồn tham khảo: {message.sources.join(" · ")}
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>

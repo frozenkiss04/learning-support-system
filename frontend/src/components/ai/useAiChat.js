@@ -73,17 +73,19 @@ export function useAiChat(lessonId) {
     async (text) => {
       const assistantId = nextId();
       let inserted = false;
+      let sources = [];
       const upsertAssistant = (content) => {
+        const extra = sources.length ? { sources } : {};
         if (!inserted) {
           inserted = true;
           setMessages((prev) => [
             ...prev,
-            { id: assistantId, role: "assistant", content },
+            { id: assistantId, role: "assistant", content, ...extra },
           ]);
         } else {
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, content } : m,
+              m.id === assistantId ? { ...m, content, ...extra } : m,
             ),
           );
         }
@@ -101,6 +103,9 @@ export function useAiChat(lessonId) {
               sessionIdRef.current = evt.session_id;
               setSessionId(evt.session_id);
             }
+          },
+          onSources: (list) => {
+            sources = Array.isArray(list) ? list : [];
           },
           onDelta: (_delta, fullText) => upsertAssistant(fullText),
         });
