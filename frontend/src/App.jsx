@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import AuthLayout from './layouts/AuthLayout.jsx'
@@ -6,26 +6,30 @@ import LearnerLayout from './layouts/LearnerLayout.jsx'
 import AdminLayout from './layouts/AdminLayout.jsx'
 import ProtectedRoute from './routes/ProtectedRoute.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { lazyWithRetry } from './lib/lazyWithRetry.js'
 
 // Route-level code splitting: every page is a lazy chunk so the initial
 // bundle only carries the app shell (layouts, router, auth guard).
-const LoginPage = lazy(() => import('./pages/auth/LoginPage.jsx'))
-const RegisterPage = lazy(() => import('./pages/auth/RegisterPage.jsx'))
+// lazyWithRetry: chunk load thất bại (thường do deploy mới làm hash chunk
+// cũ hết hiệu lực) thì tải lại trang một lần để lấy index.html mới thay
+// vì rơi thẳng vào ErrorBoundary.
+const LoginPage = lazyWithRetry(() => import('./pages/auth/LoginPage.jsx'))
+const RegisterPage = lazyWithRetry(() => import('./pages/auth/RegisterPage.jsx'))
 
-const LearnPage = lazy(() => import('./pages/learner/LearnPage.jsx'))
-const LessonPage = lazy(() => import('./pages/learner/LessonPage.jsx'))
-const ReviewPage = lazy(() => import('./pages/learner/ReviewPage.jsx'))
-const ChallengePage = lazy(() => import('./pages/learner/ChallengePage.jsx'))
-const PracticePage = lazy(() => import('./pages/learner/PracticePage.jsx'))
-const SkillsPage = lazy(() => import('./pages/learner/SkillsPage.jsx'))
-const RoleplayPage = lazy(() => import('./pages/learner/RoleplayPage.jsx'))
-const LeaderboardPage = lazy(() => import('./pages/learner/LeaderboardPage.jsx'))
-const ProfilePage = lazy(() => import('./pages/learner/ProfilePage.jsx'))
+const LearnPage = lazyWithRetry(() => import('./pages/learner/LearnPage.jsx'))
+const LessonPage = lazyWithRetry(() => import('./pages/learner/LessonPage.jsx'))
+const ReviewPage = lazyWithRetry(() => import('./pages/learner/ReviewPage.jsx'))
+const ChallengePage = lazyWithRetry(() => import('./pages/learner/ChallengePage.jsx'))
+const PracticePage = lazyWithRetry(() => import('./pages/learner/PracticePage.jsx'))
+const SkillsPage = lazyWithRetry(() => import('./pages/learner/SkillsPage.jsx'))
+const RoleplayPage = lazyWithRetry(() => import('./pages/learner/RoleplayPage.jsx'))
+const LeaderboardPage = lazyWithRetry(() => import('./pages/learner/LeaderboardPage.jsx'))
+const ProfilePage = lazyWithRetry(() => import('./pages/learner/ProfilePage.jsx'))
 
-const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard.jsx'))
-const AdminCourses = lazy(() => import('./pages/admin/AdminCourses.jsx'))
-const AdminUsers = lazy(() => import('./pages/admin/AdminUsers.jsx'))
-const AdminAiAssistant = lazy(() => import('./pages/admin/AdminAiAssistant.jsx'))
+const AdminDashboard = lazyWithRetry(() => import('./pages/admin/AdminDashboard.jsx'))
+const AdminCourses = lazyWithRetry(() => import('./pages/admin/AdminCourses.jsx'))
+const AdminUsers = lazyWithRetry(() => import('./pages/admin/AdminUsers.jsx'))
+const AdminAiAssistant = lazyWithRetry(() => import('./pages/admin/AdminAiAssistant.jsx'))
 
 function PageFallback() {
   return (
