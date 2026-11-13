@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Brain, CheckCircle2, ChevronRight, Loader2, RotateCcw, Sparkles, Trophy, XCircle } from 'lucide-react';
-import { apiPost } from '../../lib/api';
+import { apiPost, refreshAuthUser } from '../../lib/api';
 import * as sounds from '../../lib/sounds';
 
 /**
@@ -42,6 +42,8 @@ export default function PracticePage() {
       const data = await apiPost('/api/ai/practice/submit', { set_id: setData.set_id, answers });
       setResult(data);
       setPhase('result');
+      // Nộp bài cộng XP: nạp lại user để topbar cập nhật ngay.
+      refreshAuthUser();
       if (data.total > 0 && data.correct / data.total >= 0.8) sounds.complete();
       else sounds.correct();
     } catch (err) {

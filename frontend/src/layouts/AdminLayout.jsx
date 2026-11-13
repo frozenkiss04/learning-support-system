@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 
 import Logo from '../components/brand/Logo.jsx'
+import { signOut } from '../lib/api.js'
 import { readStoredAuth } from '../routes/ProtectedRoute.jsx'
 import { useAuthStore } from '../stores/authStore.js'
 
@@ -64,20 +65,20 @@ function Breadcrumb() {
 export default function AdminLayout() {
   const navigate = useNavigate()
   const storeUser = useAuthStore((s) => s.user)
-  const storeLogout = useAuthStore((s) => s.logout)
   const { user: storedUser } = readStoredAuth()
   const user = storeUser ?? storedUser
   const displayName = user?.full_name ?? 'Quản trị viên'
+  // Khu admin mở cho cả TEACHER (chỉ đọc): nhãn vai trò hiển thị theo role thật.
+  const roleLabel = user?.role === 'TEACHER' ? 'Giáo viên' : 'Admin'
 
-  function handleLogout() {
-    storeLogout()
+  async function handleLogout() {
+    // signOut: POST /api/auth/logout (best-effort) rồi xóa store, React Query
+    // cache và các key lss-* theo user; lỗi vẫn tiếp tục về /login.
     try {
-      localStorage.removeItem('lss-auth')
-      localStorage.removeItem('auth')
-    } catch {
-      // ignore storage errors on logout
+      await signOut()
+    } finally {
+      navigate('/login', { replace: true })
     }
-    navigate('/login', { replace: true })
   }
 
   return (
@@ -91,7 +92,7 @@ export default function AdminLayout() {
             <Logo size={20} />
           </span>
           <span className="rounded-sm bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
-            Admin
+            {roleLabel}
           </span>
         </div>
 
@@ -123,7 +124,7 @@ export default function AdminLayout() {
             <span className="hidden text-sm text-slate-600 sm:block">
               {displayName}
               <span className="ml-2 rounded-sm bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                Admin
+                {roleLabel}
               </span>
             </span>
             <button

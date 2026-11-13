@@ -49,7 +49,7 @@ class ReviewCard(db.Model):
     user = db.relationship("User", backref=db.backref("review_cards", lazy="dynamic"))
     exercise = db.relationship("Exercise", backref=db.backref("review_cards", lazy="dynamic"))
 
-    def to_dict(self, include_exercise: bool = False):
+    def to_dict(self, include_exercise: bool = False, include_answer: bool = False):
         data = {
             "id": self.id,
             "user_id": self.user_id,
@@ -61,9 +61,9 @@ class ReviewCard(db.Model):
             "last_result": self.last_result,
         }
         if include_exercise and self.exercise is not None:
-            # Review cards only exist for exercises the learner has already
-            # answered inside a lesson, so showing the answer here is safe and
-            # required: the flashcard flow asks learners to self-grade after
-            # flipping the card. (Lesson detail still never leaks answers.)
-            data["exercise"] = self.exercise.to_dict(include_answer=True)
+            # Đáp án chỉ kèm khi caller đã xác minh user được phép xem
+            # (đã hoàn thành bài chứa câu này — cùng quy tắc với
+            # progress_service.grade_lesson). Mặc định KHÔNG kèm đáp án:
+            # /due từng lộ toàn bộ đáp án khi include_answer=True.
+            data["exercise"] = self.exercise.to_dict(include_answer=include_answer)
         return data

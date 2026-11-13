@@ -19,6 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import api, { apiDelete } from "../../lib/api";
+import { useAuthStore } from "../../stores/authStore";
 import CourseFormDrawer from "../../components/admin/CourseFormDrawer";
 import LessonManager from "../../components/admin/LessonManager";
 
@@ -185,6 +186,9 @@ function ToastViewport({ toasts, dismiss }) {
 
 export default function AdminCourses() {
   const queryClient = useQueryClient();
+  // TEACHER được vào khu admin ở chế độ chỉ đọc (backend chặn ghi bằng
+  // admin_only): giấu các nút tạo/sửa/xóa, chỉ ADMIN mới thấy.
+  const isAdmin = useAuthStore((s) => s.user?.role === "ADMIN");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all"); // all | published | draft
@@ -274,7 +278,9 @@ export default function AdminCourses() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Quản lý khóa học</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Tạo, chỉnh sửa và xuất bản các khóa học trong hệ thống.
+            {isAdmin
+              ? "Tạo, chỉnh sửa và xuất bản các khóa học trong hệ thống."
+              : "Xem danh sách khóa học, chương và bài học trong hệ thống."}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -287,14 +293,16 @@ export default function AdminCourses() {
             <Download className="h-4 w-4" />
             Xuất CSV
           </button>
-          <button
-            type="button"
-            onClick={openCreate}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
-          >
-            <Plus className="h-4 w-4" />
-            Tạo khóa học
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={openCreate}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
+            >
+              <Plus className="h-4 w-4" />
+              Tạo khóa học
+            </button>
+          )}
         </div>
       </div>
 
@@ -416,34 +424,42 @@ export default function AdminCourses() {
                                 className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-180" : ""}`}
                               />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => openEdit(course)}
-                              className="rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                              title="Sửa khóa học"
-                              aria-label={`Sửa khóa học ${course.title}`}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDeletingCourse(course);
-                                setDeleteError("");
-                              }}
-                              className="rounded-md p-2 text-slate-600 hover:bg-red-50 hover:text-red-600"
-                              title="Xóa khóa học"
-                              aria-label={`Xóa khóa học ${course.title}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
+                            {isAdmin && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openEdit(course)}
+                                  className="rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                                  title="Sửa khóa học"
+                                  aria-label={`Sửa khóa học ${course.title}`}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeletingCourse(course);
+                                    setDeleteError("");
+                                  }}
+                                  className="rounded-md p-2 text-slate-600 hover:bg-red-50 hover:text-red-600"
+                                  title="Xóa khóa học"
+                                  aria-label={`Xóa khóa học ${course.title}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
                       {isExpanded && (
                         <tr>
                           <td colSpan={6} className="bg-slate-50 px-4 py-3">
-                            <LessonManager courseId={course.id} onNotify={notify} />
+                            <LessonManager
+                              courseId={course.id}
+                              onNotify={notify}
+                              readOnly={!isAdmin}
+                            />
                           </td>
                         </tr>
                       )}
@@ -488,17 +504,21 @@ export default function AdminCourses() {
             ) : (
               <>
                 <p className="font-medium text-slate-900">Chưa có khóa học nào</p>
-                <p className="text-sm text-slate-500">
-                  Tạo khóa học đầu tiên để bắt đầu xây dựng lộ trình học.
-                </p>
-                <button
-                  type="button"
-                  onClick={openCreate}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
-                >
-                  <Plus className="h-4 w-4" />
-                  Tạo khóa học
-                </button>
+                {isAdmin && (
+                  <>
+                    <p className="text-sm text-slate-500">
+                      Tạo khóa học đầu tiên để bắt đầu xây dựng lộ trình học.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={openCreate}
+                      className="inline-flex h-9 items-center gap-2 rounded-md bg-[#15803d] px-4 text-sm font-medium text-white hover:bg-[#166534]"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Tạo khóa học
+                    </button>
+                  </>
+                )}
               </>
             )}
           </div>

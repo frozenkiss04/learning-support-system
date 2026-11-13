@@ -27,9 +27,10 @@ const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"];
  * API: GET  /api/progress/due                       -> [{ id, exercise_id, exercise: {...} }]
  *      POST /api/progress/review/<exercise_id>      -> { is_correct, quality }
  *
- * Lưu ý dữ liệu: thẻ đến hạn chỉ kèm exercise rút gọn (question, options, type)
- * và KHÔNG kèm correct_answer/explanation (backend không trả cho học viên).
- * Mặt sau thẻ hiển thị đáp án khi API có trả; thiếu thì hiện hướng dẫn tự nhớ lại.
+ * Lưu ý dữ liệu: thẻ đến hạn chỉ kèm exercise rút gọn (question, options, type);
+ * correct_answer/explanation chỉ có với thẻ thuộc bài đã hoàn thành (đã đạt
+ * >=80%) — thẻ thuộc bài chưa hoàn thành không kèm đáp án. Mặt sau thẻ hiển
+ * thị đáp án khi API có trả; thiếu thì hiện hướng dẫn tự nhớ lại.
  */
 export default function ReviewPage() {
   const [cards, setCards] = useState([]);

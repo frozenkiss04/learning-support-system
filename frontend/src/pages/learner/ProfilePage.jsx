@@ -21,7 +21,7 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { apiGet, apiPost } from "../../lib/api";
+import { apiGet, authApi, signOut } from "../../lib/api";
 import { useAuthStore } from "../../stores/authStore";
 
 const ROLE_LABELS = {
@@ -178,7 +178,6 @@ function openCertificatePrint({ courseTitle, learnerName, dateText }) {
  */
 export default function ProfilePage() {
   const navigate = useNavigate();
-  const logout = useAuthStore((state) => state.logout);
   const setUser = useAuthStore((state) => state.setUser);
 
   const [profile, setProfile] = useState(null);
@@ -329,10 +328,19 @@ export default function ProfilePage() {
     if (!validateForm()) return;
     setSubmitting(true);
     try {
-      await apiPost("/api/auth/change-password", {
+      const data = await authApi.changePassword({
         current_password: form.current_password,
         new_password: form.new_password,
       });
+      // Backend tăng token_version khi đổi mật khẩu (vô hiệu mọi token cũ)
+      // và trả cặp token mới — thay ngay vào store, nếu không phiên hiện
+      // tại sẽ bị đá ra ở request kế tiếp.
+      if (data?.access_token || data?.refresh_token) {
+        useAuthStore.getState().setTokens({
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token,
+        });
+      }
       setForm({ current_password: "", new_password: "", confirm_password: "" });
       setSubmitSuccess("Đổi mật khẩu thành công.");
     } catch (err) {
@@ -348,7 +356,8 @@ export default function ProfilePage() {
 
   const handleLogout = async () => {
     try {
-      if (typeof logout === "function") await logout();
+      // signOut: gọi POST /api/auth/logout (best-effort) rồi xóa store + cache.
+      await signOut();
     } finally {
       navigate("/login", { replace: true });
     }

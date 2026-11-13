@@ -114,10 +114,10 @@ npm run dev                 # http://localhost:5173
 
 | Email | Mật khẩu | Vai trò |
 | --- | --- | --- |
-| `admin@example.com` | `Admin@12345` (giá trị mặc định — chính là `ADMIN_PASSWORD` trong `backend/.env.example`, đổi qua env trước khi chạy seed) | `ADMIN` |
-| `learner@example.com` | `Learner@123` | `LEARNER` |
+| `admin@example.com` | Đặt qua env `ADMIN_PASSWORD` trước khi chạy seed (production bắt buộc đặt, không có mật khẩu mặc định) | `ADMIN` |
+| `learner@example.com` | Đặt qua env `LEARNER_PASSWORD` (local/demo có giá trị mặc định trong `backend/.env.example`) | `LEARNER` |
 
-> Kiểm chứng trước khi demo: bản `backend/app/seed.py` tại thời điểm viết tài liệu này tạo sẵn tài khoản admin + khóa mẫu `english-a1`; tài khoản learner ở trên là tài khoản demo **đã quy định cho seed** — nếu chưa đăng nhập được, kiểm tra seed đã bổ sung user này chưa thay vì tự đặt mật khẩu khác. Hai mật khẩu trên là mật khẩu demo cho môi trường dev, **không** dùng nguyên trạng trên production.
+> Kiểm chứng trước khi demo: bản `backend/app/seed.py` tại thời điểm viết tài liệu này tạo sẵn tài khoản admin + khóa mẫu `english-a1`; tài khoản learner ở trên là tài khoản demo **đã quy định cho seed** — nếu chưa đăng nhập được, kiểm tra seed đã bổ sung user này chưa thay vì tự đặt mật khẩu khác. Không dùng mật khẩu demo nguyên trạng trên production.
 
 ## Tài liệu
 

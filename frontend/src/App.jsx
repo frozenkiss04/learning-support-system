@@ -154,10 +154,12 @@ export default function App() {
         />
       </Route>
 
-      {/* Admin area — ADMIN role only */}
+      {/* Admin area — ADMIN + TEACHER (backend cho TEACHER đọc stats, users,
+          courses, lessons yếu, RAG stats/reindex, AI weekly-report; các nút
+          ghi chỉ hiện với ADMIN trong từng page, backend cũng chặn ghi) */}
       <Route
         element={
-          <ProtectedRoute roles={['ADMIN']}>
+          <ProtectedRoute roles={['ADMIN', 'TEACHER']}>
             <AdminLayout />
           </ProtectedRoute>
         }

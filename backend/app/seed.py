@@ -4,9 +4,11 @@ Dữ liệu khóa học nằm ở ``backend/seed_data/courses.json`` (ngoài pac
 bên cạnh thư mục ``app/``). Lệnh ``flask seed``:
 
 - Tạo admin từ env ``ADMIN_EMAIL`` / ``ADMIN_PASSWORD``
-  (mặc định admin@example.com / Admin@12345 — chỉ dùng cho local/demo).
-- Tạo learner demo learner@example.com / Learner@123
-  (đổi được qua ``LEARNER_EMAIL`` / ``LEARNER_PASSWORD``).
+  (không có mật khẩu mặc định trên production: thiếu ``ADMIN_PASSWORD``
+  khi ``FLASK_ENV=production`` thì seed dừng lỗi thay vì tạo admin với
+  mật khẩu công khai; local/demo mới dùng mật khẩu mặc định).
+- Tạo learner demo learner@example.com (mật khẩu đổi được qua
+  ``LEARNER_EMAIL`` / ``LEARNER_PASSWORD``).
 - Nạp 2 khóa: "Tiếng Anh giao tiếp A1" (slug english-a1) và
   "Tiếng Anh A2" (slug english-a2) với unit/lesson/exercise trong JSON.
 
@@ -101,10 +103,20 @@ def register_seed_cli(app):
         db.create_all()
         stats = {"courses": 0, "units": 0, "lessons": 0, "exercises": 0}
 
+        # Fail-closed: production mà không đặt ADMIN_PASSWORD thì dừng lỗi
+        # thay vì tạo admin với mật khẩu mặc định công khai (ai cũng biết).
+        # Local/demo vẫn dùng mật khẩu mặc định cho tiện chạy thử.
+        admin_password = os.getenv("ADMIN_PASSWORD")
+        if not admin_password:
+            if os.getenv("FLASK_ENV", "") == "production":
+                raise click.ClickException(
+                    "ADMIN_PASSWORD chưa được đặt trong env production — "
+                    "seed dừng để không tạo tài khoản admin với mật khẩu "
+                    "mặc định. Hãy đặt ADMIN_PASSWORD rồi chạy lại.")
+            admin_password = "Admin@12345"
         admin_email = os.getenv("ADMIN_EMAIL", "admin@example.com")
         _, admin_created = _get_or_create_user(
-            admin_email, "Quản trị viên", ROLE_ADMIN,
-            os.getenv("ADMIN_PASSWORD", "Admin@12345"))
+            admin_email, "Quản trị viên", ROLE_ADMIN, admin_password)
 
         learner_email = os.getenv("LEARNER_EMAIL", "learner@example.com")
         _, learner_created = _get_or_create_user(
@@ -113,12 +125,20 @@ def register_seed_cli(app):
 
         _seed_courses(stats)
         db.session.commit()
+        # Build RAG index ở bước seed/deploy (không build đồng bộ trong
+        # request chat nữa): chỉ build khi index trống hoặc mode/dim đã đổi.
+        from .services.rag_service import build_if_needed
+
+        rag = build_if_needed()
         click.echo(
             "Seed xong (idempotent): "
             f"admin {admin_email} ({'mới tạo' if admin_created else 'đã có'}), "
             f"learner {learner_email} ({'mới tạo' if learner_created else 'đã có'}), "
             f"mới thêm {stats['courses']} course, {stats['units']} unit, "
-            f"{stats['lessons']} lesson, {stats['exercises']} exercise."
+            f"{stats['lessons']} lesson, {stats['exercises']} exercise; "
+            f"RAG index: {rag['chunks']} chunk "
+            f"({'đã build lại' if rag.get('rebuilt') else 'đã có sẵn'}, "
+            f"mode={rag['mode']})."
         )
 
     @app.cli.command("rag-index")

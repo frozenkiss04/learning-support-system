@@ -8,6 +8,8 @@ revealed by the submit endpoint, after grading, via ``progress_service``.
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from ..extensions import db
 from ..models.course import Course, Unit
@@ -86,9 +88,15 @@ def _visible_course(course_id, user):
     """Return the course, or None when it must look non-existent (404).
 
     Unpublished courses are hidden from learners and anonymous visitors;
-    teachers/admins can still preview them.
+    teachers/admins can still preview them. Units/lessons/exercises are
+    eager-loaded so the learning path does not issue one query per lesson.
     """
-    course = Course.query.get(course_id)
+    course = db.session.get(
+        Course, course_id,
+        options=[selectinload(Course.units)
+                 .selectinload(Unit.lessons)
+                 .selectinload(Lesson.exercises)],
+    )
     if course is None:
         return None
     if not course.is_published and (user is None or user.role not in STAFF_ROLES):
@@ -216,12 +224,25 @@ def submit_lesson(lesson_id):
     lesson = Lesson.query.get(lesson_id)
     if lesson is None:
         return fail("Bài học không tồn tại", 404)
+    # lesson_detail đã chặn khóa chưa xuất bản nhưng submit thì chưa — học
+    # viên nộp vào khóa nháp vẫn được chấm và lộ đáp án. Dùng chung
+    # _visible_course để đồng nhất quy tắc (staff vẫn được nộp thử).
+    course = lesson.unit.course if lesson.unit else None
+    if course is not None and _visible_course(course.id, user) is None:
+        return fail("Bài học không tồn tại", 404)
     if not lesson.exercises:
         return fail("Bài học chưa có câu hỏi", 400)
     answers = (request.get_json(silent=True) or {}).get("answers")
     if not isinstance(answers, dict):
         return fail("Trường 'answers' phải là object {exercise_id: answer}", 400)
-    result = grade_lesson(user, lesson, answers)
+    try:
+        result = grade_lesson(user, lesson, answers)
+    except IntegrityError:
+        # Race: 2 lần nộp song song cùng tạo UserProgress (user_id,
+        # lesson_id) — unique constraint giữ một bản, lần còn lại báo 409
+        # thay vì 500 để client nộp lại.
+        db.session.rollback()
+        return fail("Bài nộp đang được xử lý, vui lòng nộp lại", 409)
     return ok(result)
 
 
@@ -236,13 +257,14 @@ def leaderboard():
         limit = 20
     limit = min(max(limit, 1), 100)
     users = (User.query
+             .options(selectinload(User.streak))
              .filter_by(is_active=True)
              .order_by(User.xp.desc(), User.id.asc())
              .limit(limit)
              .all())
     return ok([
         {"rank": rank, "id": u.id, "full_name": u.full_name, "xp": u.xp,
-         "current_streak": u.streak.current_streak if u.streak else 0,
+         "current_streak": u.streak.display_current_streak() if u.streak else 0,
          "is_current_user": user is not None and u.id == user.id}
         for rank, u in enumerate(users, start=1)
     ])

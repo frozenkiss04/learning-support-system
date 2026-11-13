@@ -20,7 +20,11 @@ None of these helpers commit: the caller owns the transaction, so
 """
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.orm import selectinload
+
 from ..extensions import db
+from ..models.course import Course, Unit
+from ..models.learning import Exercise, Lesson
 from ..models.review import DEFAULT_EASE_FACTOR, ReviewCard
 
 MIN_EASE_FACTOR = 1.3
@@ -119,13 +123,32 @@ def record_result(
     return apply_result(card, is_correct, quality=quality, now=now)
 
 
+def _due_query(user_id: int, now: datetime | None = None):
+    """Base query for due cards: only exercises of PUBLISHED courses.
+
+    Cards created while a course was published must disappear from the
+    review queue if the course is later unpublished — otherwise /due would
+    leak (and keep drilling) content the learner can no longer open.
+    """
+    return (
+        ReviewCard.query
+        .join(Exercise, Exercise.id == ReviewCard.exercise_id)
+        .join(Lesson, Lesson.id == Exercise.lesson_id)
+        .join(Unit, Unit.id == Lesson.unit_id)
+        .join(Course, Course.id == Unit.course_id)
+        .filter(
+            ReviewCard.user_id == user_id,
+            ReviewCard.next_review_at <= _now(now),
+            Course.is_published.is_(True),
+        )
+    )
+
+
 def due_cards(user_id: int, now: datetime | None = None, limit: int = 20) -> list[ReviewCard]:
     """Cards whose review time has arrived, most overdue first."""
     return (
-        ReviewCard.query.filter(
-            ReviewCard.user_id == user_id,
-            ReviewCard.next_review_at <= _now(now),
-        )
+        _due_query(user_id, now)
+        .options(selectinload(ReviewCard.exercise))
         .order_by(ReviewCard.next_review_at.asc())
         .limit(limit)
         .all()
@@ -133,7 +156,4 @@ def due_cards(user_id: int, now: datetime | None = None, limit: int = 20) -> lis
 
 
 def due_count(user_id: int, now: datetime | None = None) -> int:
-    return ReviewCard.query.filter(
-        ReviewCard.user_id == user_id,
-        ReviewCard.next_review_at <= _now(now),
-    ).count()
+    return _due_query(user_id, now).count()

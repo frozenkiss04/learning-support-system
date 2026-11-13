@@ -5,7 +5,8 @@ Thứ tự triển khai bắt buộc: **Neon → Render → Vercel → quay lạ
 Trạng thái cần biết trước khi bắt đầu:
 
 - Backend đã có `backend/Dockerfile` (Gunicorn) và chạy được bằng Python runtime của Render.
-- Repo **chưa có migration scripts Alembic** (`backend/migrations/` mới có README). Lần deploy đầu, schema được tạo bằng `flask seed` (lệnh này tự `db.create_all()` + tạo admin + khóa mẫu). Mục `flask db upgrade` ở dưới dành cho khi đã `flask db init` và có file migration thật — đừng chạy và tưởng DB đã được migrate nếu bước init chưa làm.
+- Repo **đã có migration Alembic** (`backend/migrations/`): migration đầu tiên khớp toàn bộ schema hiện tại. Quy trình deploy chạy `flask db upgrade` trước `flask seed` (xem `render.yaml` startCommand và `backend/Dockerfile`); `flask seed` vẫn tự `db.create_all()` như lưới an toàn và tạo admin + khóa mẫu. Khi đổi schema: ở máy dev chạy `flask db migrate` rồi commit file migration mới, deploy sẽ tự upgrade.
+- **Rate limiter mặc định `memory://` tính giới hạn "mỗi worker"**: Gunicorn chạy 2 worker thì mỗi worker đếm riêng (ví dụ giới hạn 30 req/giờ cho AI chat thực chất là tối đa 30 req/giờ *mỗi worker*). Muốn giới hạn toàn cục thì đặt `RATELIMIT_STORAGE_URI` trỏ Redis — repo hiện chưa tự thêm Redis, đây là lựa chọn có chủ đích để giữ deploy free-tier đơn giản.
 - Render free tier và Neon free tier đều "ngủ" khi rảnh — xem mục lưu ý cold start ở cuối.
 
 ---
@@ -41,8 +42,8 @@ Ghi chú kỹ thuật (đã xử lý sẵn trong `backend/app/config.py`, không
    - **Region:** chọn cùng khu vực với Neon nếu có (Singapore).
    - **Instance Type:** Free (demo) hoặc Starter khi cần hết cold start.
 3. Chọn 1 trong 2 cách chạy:
-   - **Docker (khuyến nghị, dùng `backend/Dockerfile` có sẵn):** Runtime = **Docker**. Không cần Build/Start Command — Dockerfile đã chạy: `gunicorn wsgi:app --bind 0.0.0.0:${PORT:-10000} --workers 2 --threads 4 --timeout 120`.
-   - **Python runtime:** Build Command: `pip install -r requirements.txt` · Start Command: `gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120`. Đặt env `PYTHON_VERSION=3.12.3` trong dashboard nếu Render chọn bản Python khác.
+   - **Docker (khuyến nghị, dùng `backend/Dockerfile` có sẵn):** Runtime = **Docker**. Không cần Build/Start Command — Dockerfile đã chạy: `flask db upgrade && flask seed && gunicorn wsgi:app ...`.
+   - **Python runtime:** Build Command: `pip install -r requirements.txt` · Start Command: `flask --app wsgi db upgrade && flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120` (khớp `render.yaml`). Đặt env `PYTHON_VERSION=3.12.3` trong dashboard nếu Render chọn bản Python khác.
 4. **Health Check Path:** `/health`.
 
 ### 2.2. Biến môi trường (Environment → Add Environment Variable)
@@ -54,7 +55,7 @@ Ghi chú kỹ thuật (đã xử lý sẵn trong `backend/app/config.py`, không
 | `JWT_SECRET_KEY` | Chuỗi ngẫu nhiên dài, **khác** `SECRET_KEY` | Có |
 | `CORS_ORIGINS` | `http://localhost:5173` lúc đầu; sau khi có domain Vercel thì sửa thành `https://<project>.vercel.app,http://localhost:5173` | Có |
 | `ADMIN_EMAIL` | Mặc định `admin@example.com` nếu không đặt | Không |
-| `ADMIN_PASSWORD` | Mật khẩu admin đầu tiên — **không** dùng mặc định `Admin@12345` trên production | Nên đặt |
+| `ADMIN_PASSWORD` | Mật khẩu admin đầu tiên — **bắt buộc đặt** trên production, seed sẽ dừng lỗi nếu thiếu (không có mật khẩu mặc định) | Có (production) |
 | `AI_PROVIDER` | `gemini` (mặc định) hoặc `openai` | Không |
 | `AI_MODEL` | `gemini-3.8-flash` (mặc định) hoặc model OpenAI tương ứng | Không |
 | `GEMINI_API_KEY` | Key từ Google AI Studio — nếu dùng Gemini | Theo provider |
@@ -68,14 +69,10 @@ Không đặt key AI thì hệ thống vẫn chạy, AI trả lời ở chế đ
 Vào **Render Dashboard → service → Shell**:
 
 ```bash
-# Lần đầu (chưa có migration): tạo bảng + admin + khóa mẫu english-a1 (idempotent, chạy lại an toàn)
-flask --app wsgi seed
-```
-
-Khi repo đã được khởi tạo migration (trạng thái hiện tại: **chưa**), quy trình chuẩn cho các lần đổi schema về sau là:
-
-```bash
-flask --app wsgi db upgrade   # chỉ có tác dụng khi đã có file migration trong backend/migrations/
+# Quy trình chuẩn: migrate schema trước, seed sau (seed idempotent, chạy lại an toàn).
+# startCommand trong render.yaml và CMD trong backend/Dockerfile đã chạy sẵn
+# 2 lệnh này mỗi lần deploy, nên thường không cần chạy tay nữa.
+flask --app wsgi db upgrade
 flask --app wsgi seed
 ```
 

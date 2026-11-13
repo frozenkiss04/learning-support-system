@@ -6,17 +6,14 @@
 # Phương án thay thế: deploy dạng Docker bằng backend/Dockerfile
 # (đổi runtime: docker, dockerfilePath: ./Dockerfile, bỏ build/startCommand).
 #
-# --- Sau khi service chạy lần đầu (Render Shell, thư mục backend) ---
-# Thư mục migrations/ hiện CHƯA có Alembic env (chỉ có README) nên
-# `flask db upgrade` CHƯA chạy được. Hai lựa chọn:
-#   1) Nhanh (lần đầu/demo):  flask seed
-#      -> seed tự db.create_all() + tạo admin + khoá học mẫu, chạy lại an toàn.
-#   2) Chuẩn lâu dài: ở máy dev chạy `flask db init && flask db migrate`
-#      rồi commit thư mục migrations/, sau đó mỗi lần deploy chạy:
-#           flask db upgrade && flask seed
-# Khi đã có migrations đầy đủ và dùng gói trả phí, có thể bật sẵn:
-#   preDeployCommand: flask db upgrade
-# (preDeployCommand chỉ khả dụng ở plan trả phí; plan free chạy tay qua Shell.)
+# --- Deploy chạy migration trước, seed sau (xem startCommand bên dưới) ---
+# Thư mục migrations/ đã có Alembic env + migration đầu tiên khớp toàn bộ
+# schema hiện tại. Mỗi lần deploy, startCommand chạy:
+#   flask db upgrade && flask seed && gunicorn ...
+# (seed idempotent, chạy lại an toàn; `flask seed` vẫn tự db.create_all()
+# như lưới an toàn). Khi đổi schema: ở máy dev chạy `flask db migrate`
+# rồi commit file migration mới. Khi đã dùng gói trả phí, có thể chuyển
+# `flask db upgrade` sang preDeployCommand (chỉ khả dụng ở plan trả phí).
 # ============================================================
 services:
   - type: web
@@ -29,7 +26,7 @@ services:
     healthCheckPath: /health
     buildCommand: pip install -r requirements.txt
     # $PORT do Render cấp — không hardcode cổng. Worker/thread khớp Dockerfile.
-    startCommand: flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
+    startCommand: flask --app wsgi db upgrade && flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7

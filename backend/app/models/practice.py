@@ -16,7 +16,9 @@ def _utcnow() -> datetime:
 
 class AiPracticeSet(db.Model):
     __tablename__ = "ai_practice_sets"
-
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "set_date", name="uq_practice_set_user_day"),
+    )
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     set_date = db.Column(db.Date, nullable=False, index=True)

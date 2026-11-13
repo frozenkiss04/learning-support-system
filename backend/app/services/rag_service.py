@@ -121,7 +121,17 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------------------------------------------------------------------------
 def build_index() -> dict:
     """Rebuild the whole index from published content. Idempotent."""
+    mode = embedding_mode()
     rows: list[KnowledgeChunk] = []
+
+    def _chunk(source_type, source_id, course_id, title, content):
+        vec = embed(content)
+        return KnowledgeChunk(
+            source_type=source_type, source_id=source_id,
+            course_id=course_id, title=title, content=content,
+            embedding=json.dumps(vec),
+            embedding_mode=mode, embedding_dim=len(vec))
+
     courses = Course.query.filter_by(is_published=True).all()
     for course in courses:
         for unit in course.units:
@@ -131,54 +141,85 @@ def build_index() -> dict:
                 lesson_content = "\n".join(
                     part for part in [prefix, lesson.title, lesson.description or ""]
                     if part)
-                rows.append(KnowledgeChunk(
-                    source_type="lesson", source_id=lesson.id,
-                    course_id=course.id, title=lesson.title,
-                    content=lesson_content,
-                    embedding=json.dumps(embed(lesson_content))))
+                rows.append(_chunk("lesson", lesson.id, course.id,
+                                   lesson.title, lesson_content))
                 for ex in lesson.exercises:
                     lines = [prefix, f"Câu hỏi: {ex.question}",
                              f"Đáp án đúng: {ex.correct_answer}"]
                     if ex.explanation:
                         lines.append(f"Giải thích: {ex.explanation}")
                     content = "\n".join(lines)
-                    rows.append(KnowledgeChunk(
-                        source_type="exercise", source_id=ex.id,
-                        course_id=course.id,
-                        title=(ex.question or "")[:200],
-                        content=content,
-                        embedding=json.dumps(embed(content))))
+                    rows.append(_chunk("exercise", ex.id, course.id,
+                                       (ex.question or "")[:200], content))
     db.session.query(KnowledgeChunk).delete()
+    # Bulk delete không gỡ object cũ khỏi identity map; expunge để các row
+    # mới (có thể trùng PK) không đè lên object đã load trong session.
+    db.session.expunge_all()
     db.session.add_all(rows)
     db.session.commit()
-    return {"chunks": len(rows), "mode": embedding_mode()}
+    return {"chunks": len(rows), "mode": mode}
 
 
-def build_if_empty() -> dict:
-    """Build the index on first use (production boot has no CLI step)."""
-    count = KnowledgeChunk.query.count()
-    if count == 0:
-        return build_index()
-    return {"chunks": count, "mode": embedding_mode()}
+def _index_is_stale() -> bool:
+    """True khi index trống hoặc được build bằng embedder khác hiện tại."""
+    chunks = KnowledgeChunk.query.with_entities(
+        KnowledgeChunk.embedding_mode, KnowledgeChunk.embedding_dim).all()
+    if not chunks:
+        return True
+    mode = embedding_mode()
+    for stored_mode, stored_dim in chunks:
+        if stored_mode is not None and stored_mode != mode:
+            return True
+        if (stored_dim is not None and mode == "local"
+                and stored_dim != DIM):
+            return True
+    return False
+
+
+def build_if_needed() -> dict:
+    """Build (lại) index khi trống hoặc lỗi thời — chỉ gọi ở bước seed/deploy
+    hoặc lệnh CLI, KHÔNG gọi trong request chat (xem retrieve)."""
+    if _index_is_stale():
+        result = build_index()
+        result["rebuilt"] = True
+        return result
+    return {"chunks": KnowledgeChunk.query.count(),
+            "mode": embedding_mode(), "rebuilt": False}
 
 
 # ---------------------------------------------------------------------------
 # Retrieval
 # ---------------------------------------------------------------------------
 def retrieve(query: str, top_k: int = 4, course_id: int | None = None) -> list[dict]:
+    """Tìm chunk liên quan — KHÔNG build index ở đây.
+
+    Trước đây retrieve() gọi build_if_empty() nên request chat đầu tiên
+    sau deploy phải chờ build toàn bộ index đồng bộ (embedding từng chunk).
+    Giờ index được build ở bước seed/deploy (``flask seed`` gọi
+    build_if_needed, hoặc ``flask rag-index`` / POST /admin/rag/reindex);
+    nếu index trống hoặc lỗi thời, retrieve chỉ trả rỗng và chat vẫn chạy
+    bình thường (không có ngữ cảnh tài liệu).
+    """
     if not (query or "").strip():
         return []
-    build_if_empty()
     q = KnowledgeChunk.query
     if course_id is not None:
         q = q.filter_by(course_id=course_id)
     chunks = q.all()
     if not chunks:
         return []
+    mode = embedding_mode()
     query_vec = embed(query)
-    threshold = THRESHOLDS[embedding_mode()]
+    threshold = THRESHOLDS[mode]
     scored = []
     for chunk in chunks:
+        # Bỏ chunk build bằng embedder khác (mode/dim không khớp): vector
+        # khác không gian thì cosine vô nghĩa.
+        if chunk.embedding_mode is not None and chunk.embedding_mode != mode:
+            continue
+        if (chunk.embedding_dim is not None
+                and chunk.embedding_dim != len(query_vec)):
+            continue
         try:
             vec = json.loads(chunk.embedding or "[]")
         except (TypeError, ValueError):

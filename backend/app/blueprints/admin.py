@@ -448,7 +448,27 @@ def update_user(user_id):
 @manager
 def list_courses_admin():
     courses = Course.query.order_by(Course.id).all()
-    return ok([c.to_dict() for c in courses])
+    if not courses:
+        return ok([])
+    # Đếm unit/lesson bằng 2 query GROUP BY thay vì để to_dict() lazy-load
+    # từng quan hệ (trước đây mỗi khóa là 1+N query).
+    course_ids = [c.id for c in courses]
+    unit_counts = dict(
+        db.session.query(Unit.course_id, func.count(Unit.id))
+        .filter(Unit.course_id.in_(course_ids))
+        .group_by(Unit.course_id)
+        .all()
+    )
+    lesson_counts = dict(
+        db.session.query(Unit.course_id, func.count(Lesson.id))
+        .join(Lesson, Lesson.unit_id == Unit.id)
+        .filter(Unit.course_id.in_(course_ids))
+        .group_by(Unit.course_id)
+        .all()
+    )
+    return ok([c.to_dict(total_units=unit_counts.get(c.id, 0),
+                          total_lessons=lesson_counts.get(c.id, 0))
+               for c in courses])
 
 
 def _validate_course_fields(body, *, partial, current_id=None):

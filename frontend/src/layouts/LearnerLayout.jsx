@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { BookOpen, Brain, Flame, Layers, LogOut, MessagesSquare, Mic, Trophy, UserRound, X, Zap } from 'lucide-react'
 
 import Logo from '../components/brand/Logo.jsx'
-import { apiGet } from '../lib/api.js'
+import { apiGet, signOut } from '../lib/api.js'
 import { readStoredAuth } from '../routes/ProtectedRoute.jsx'
 import { useAuthStore } from '../stores/authStore.js'
 
@@ -40,7 +40,6 @@ export default function LearnerLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const storeUser = useAuthStore((s) => s.user)
-  const storeLogout = useAuthStore((s) => s.logout)
   const { user: storedUser } = readStoredAuth()
   const user = storeUser ?? storedUser
 
@@ -72,15 +71,14 @@ export default function LearnerLayout() {
   const displayName = user?.full_name ?? 'Học viên'
   const initial = displayName.trim().charAt(0).toUpperCase() || 'H'
 
-  function handleLogout() {
-    storeLogout()
+  async function handleLogout() {
+    // signOut: POST /api/auth/logout (best-effort) rồi xóa store, React Query
+    // cache và các key lss-* theo user; lỗi vẫn tiếp tục về /login.
     try {
-      localStorage.removeItem('lss-auth')
-      localStorage.removeItem('auth')
-    } catch {
-      // ignore storage errors on logout
+      await signOut()
+    } finally {
+      navigate('/login', { replace: true })
     }
-    navigate('/login', { replace: true })
   }
 
   return (

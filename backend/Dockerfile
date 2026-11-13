@@ -34,4 +34,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # Render tự cấp $PORT; WEB_CONCURRENCY (env của gunicorn) quyết định số worker,
 # chỉnh được ngay trên Render mà không build lại image. --timeout 120 cho AI chat.
-CMD ["sh", "-c", "flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:${PORT:-10000} --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -"]
+# Migrate schema trước, seed sau (seed idempotent): cùng thứ tự với render.yaml.
+CMD ["sh", "-c", "flask --app wsgi db upgrade && flask --app wsgi seed && gunicorn wsgi:app --bind 0.0.0.0:${PORT:-10000} --threads 4 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -"]

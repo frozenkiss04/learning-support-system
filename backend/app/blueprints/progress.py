@@ -18,10 +18,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
+from ..models.course import Course, Unit
 from ..models.gamification import UserQuestClaim
 from ..models.learning import Attempt, Exercise, Lesson, Streak, UserProgress
 from ..models.review import ReviewCard
-from ..models.user import User
+from ..models.user import ROLE_ADMIN, ROLE_TEACHER, User
+from ..services.progress_service import award_xp
 from ..services.srs_service import due_cards, due_count, record_result
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
@@ -42,7 +44,25 @@ def due_reviews():
     limit = request.args.get("limit", 20, type=int)
     limit = max(1, min(limit or 20, MAX_DUE_LIMIT))
     cards = due_cards(user.id, limit=limit)
-    return ok([card.to_dict(include_exercise=True) for card in cards])
+    # Chỉ kèm đáp án cho thẻ thuộc bài user ĐÃ hoàn thành (đã đạt >=80%):
+    # user đã "kiếm" được đáp án đó qua nộp bài đạt, giống quy tắc ở
+    # grade_lesson. Thẻ thuộc bài chưa hoàn thành chỉ trả câu hỏi.
+    completed_lesson_ids = {
+        row[0]
+        for row in db.session.query(UserProgress.lesson_id)
+        .filter_by(user_id=user.id, status="COMPLETED")
+        .all()
+    }
+    return ok([
+        card.to_dict(
+            include_exercise=True,
+            include_answer=(
+                card.exercise is not None
+                and card.exercise.lesson_id in completed_lesson_ids
+            ),
+        )
+        for card in cards
+    ])
 
 
 @progress_bp.post("/review/<int:exercise_id>")
@@ -57,7 +77,27 @@ def submit_review(exercise_id):
     if quality is not None and (not isinstance(quality, int) or not 0 <= quality <= 5):
         return fail("quality phải là số nguyên từ 0 đến 5")
 
-    Exercise.query.get_or_404(exercise_id)
+    exercise = Exercise.query.get_or_404(exercise_id)
+    # Chỉ được ôn bài tập mình đã từng làm trong một bài nộp (có Attempt):
+    # nếu không, bất kỳ ai cũng tạo được thẻ SRS cho bài chưa học rồi lấy
+    # đáp án qua /due. Khóa chưa xuất bản cũng không được ôn (trừ staff).
+    has_attempt = (
+        Attempt.query
+        .filter_by(user_id=user.id, exercise_id=exercise_id)
+        .first()
+    ) is not None
+    if not has_attempt:
+        return fail("Bạn chưa học bài tập này nên chưa thể ôn tập", 403)
+    course = (
+        db.session.query(Course)
+        .join(Unit, Unit.course_id == Course.id)
+        .join(Lesson, Lesson.unit_id == Unit.id)
+        .filter(Lesson.id == exercise.lesson_id)
+        .first()
+    )
+    if (course is not None and not course.is_published
+            and user.role not in (ROLE_ADMIN, ROLE_TEACHER)):
+        return fail("Bài tập không tồn tại", 404)
     card = record_result(user.id, exercise_id, is_correct, quality=quality)
     db.session.commit()
     return ok(card.to_dict())
@@ -73,7 +113,7 @@ def summary():
     ).count()
     return ok({
         "xp": user.xp,
-        "current_streak": streak.current_streak if streak else 0,
+        "current_streak": streak.display_current_streak() if streak else 0,
         "longest_streak": streak.longest_streak if streak else 0,
         "completed_lessons": completed,
         "due_reviews": due_count(user.id),
@@ -208,7 +248,7 @@ def claim_daily_quests():
     db.session.add(UserQuestClaim(
         user_id=user.id, quest_date=today, xp_awarded=QUEST_CLAIM_XP,
     ))
-    user.xp = (user.xp or 0) + QUEST_CLAIM_XP
+    award_xp(user.id, QUEST_CLAIM_XP)
     try:
         db.session.commit()
     except IntegrityError:

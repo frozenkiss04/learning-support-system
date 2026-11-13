@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import api from "../../lib/api";
+import { useAuthStore } from "../../stores/authStore";
 
 /**
  * Quản lý học viên (admin).
@@ -129,6 +130,9 @@ function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, 
 }
 
 export default function AdminUsers() {
+  // TEACHER được vào khu admin ở chế độ chỉ đọc (PATCH /users là admin_only
+  // ở backend): ẩn cả cột Hành động (đổi vai trò, khóa/mở tài khoản).
+  const isAdmin = useAuthStore((s) => s.user?.role === "ADMIN");
   const [users, setUsers] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -297,13 +301,15 @@ export default function AdminUsers() {
                 <th className="px-4 py-3 text-right font-medium">XP</th>
                 <th className="px-4 py-3 font-medium">Trạng thái</th>
                 <th className="px-4 py-3 font-medium">Ngày tạo</th>
-                <th className="px-4 py-3 text-right font-medium">Hành động</th>
+                {isAdmin && (
+                  <th className="px-4 py-3 text-right font-medium">Hành động</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {!loading && users.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center">
+                  <td colSpan={isAdmin ? 7 : 6} className="px-4 py-12 text-center">
                     <Users className="mx-auto h-6 w-6 text-slate-300" />
                     <p className="mt-2 text-sm text-slate-500">
                       {debouncedQuery
@@ -351,38 +357,40 @@ export default function AdminUsers() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{formatDate(user.created_at)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-2">
-                      <select
-                        value={user.role}
-                        disabled={busyId === user.id}
-                        onChange={(e) => handleRoleChange(user, e.target.value)}
-                        className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-green-700 disabled:opacity-50"
-                        aria-label={`Đổi vai trò của ${user.email}`}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_LABEL[r]}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        disabled={busyId === user.id}
-                        onClick={() => handleToggleActive(user)}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        {busyId === user.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : user.is_active ? (
-                          <Lock className="h-4 w-4" />
-                        ) : (
-                          <LockOpen className="h-4 w-4" />
-                        )}
-                        {user.is_active ? "Khóa" : "Mở khóa"}
-                      </button>
-                    </div>
-                  </td>
+                  {isAdmin && (
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <select
+                          value={user.role}
+                          disabled={busyId === user.id}
+                          onChange={(e) => handleRoleChange(user, e.target.value)}
+                          className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-green-700 disabled:opacity-50"
+                          aria-label={`Đổi vai trò của ${user.email}`}
+                        >
+                          {ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {ROLE_LABEL[r]}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={busyId === user.id}
+                          onClick={() => handleToggleActive(user)}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {busyId === user.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : user.is_active ? (
+                            <Lock className="h-4 w-4" />
+                          ) : (
+                            <LockOpen className="h-4 w-4" />
+                          )}
+                          {user.is_active ? "Khóa" : "Mở khóa"}
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

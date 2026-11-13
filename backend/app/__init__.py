@@ -18,6 +18,13 @@ def create_app(config_object=Config):
     app = Flask(__name__)
     app.config.from_object(config_object)
 
+    # Sau Render proxy, REMOTE_ADDR là IP của proxy nếu không có ProxyFix —
+    # rate limit (key theo IP) sẽ đếm gộp mọi user thành 1. Chỉ tin 1 tầng
+    # proxy (Render) qua X-Forwarded-*.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
@@ -53,4 +60,30 @@ def create_app(config_object=Config):
     from .seed import register_seed_cli
 
     register_seed_cli(app)
+
+    # Lỗi HTTP toàn cục trả JSON đúng format fail(...) thay vì trang HTML
+    # mặc định của Flask (frontend chỉ biết parse JSON). Không ảnh hưởng
+    # blueprint health: /health thành công vẫn 200 qua ok(), chỉ khi DB
+    # chết nó tự trả 503 JSON (xem blueprints/health.py).
+    from .utils.responses import fail
+
+    @app.errorhandler(404)
+    def _handle_404(error):
+        return fail("Không tìm thấy tài nguyên", 404)
+
+    @app.errorhandler(405)
+    def _handle_405(error):
+        return fail("Phương thức không được hỗ trợ cho đường dẫn này", 405)
+
+    @app.errorhandler(429)
+    def _handle_429(error):
+        # Flask-Limiter ném HTTPException 429 khi vượt giới hạn (vd AI chat
+        # 30/giờ): mặc định Flask trả trang HTML, frontend không parse được.
+        return fail("Bạn đã gửi quá nhiều yêu cầu, vui lòng thử lại sau", 429)
+
+    @app.errorhandler(500)
+    def _handle_500(error):
+        db.session.rollback()
+        return fail("Lỗi máy chủ, vui lòng thử lại sau", 500)
+
     return app

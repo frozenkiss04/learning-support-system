@@ -1,5 +1,6 @@
 import axios from "axios";
 
+import { queryClient } from "./queryClient";
 import { useAuthStore } from "../stores/authStore";
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
@@ -28,6 +29,54 @@ function redirectToLogin() {
   }
 }
 
+/**
+ * Xóa toàn bộ phiên ở phía client: auth store, React Query cache (để user
+ * sau không thấy thoáng dữ liệu của user trước) và các key localStorage
+ * gắn với user (lss-auth, legacy "auth", kỷ lục thử thách, mục tiêu ngày,
+ * mốc XP baseline theo ngày). Key "lss-sounds" là tùy chọn của thiết bị,
+ * không gắn với user nên được giữ lại.
+ */
+export function clearLocalSession() {
+  useAuthStore.getState().logout();
+  try {
+    queryClient.clear();
+  } catch {
+    // cache đã sạch hoặc chưa khởi tạo — bỏ qua
+  }
+  try {
+    const storage = window.localStorage;
+    storage.removeItem("lss-auth");
+    storage.removeItem("auth");
+    storage.removeItem("lss-challenge-best");
+    storage.removeItem("lss-daily-goal");
+    // lss-xp-baseline-YYYY-MM-DD — xóa theo tiền tố
+    const prefixKeys = [];
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (key && key.startsWith("lss-xp-baseline-")) prefixKeys.push(key);
+    }
+    prefixKeys.forEach((key) => storage.removeItem(key));
+  } catch {
+    // ignore storage errors on logout
+  }
+}
+
+/**
+ * Đăng xuất đầy đủ: gọi POST /api/auth/logout để backend thu hồi token
+ * (best-effort — lỗi mạng hay token đã hết hạn thì vẫn tiếp tục), rồi xóa
+ * phiên ở client. Mọi nút đăng xuất trong app đều dùng hàm này.
+ */
+export async function signOut() {
+  try {
+    // Gửi kèm refresh token để backend thu hồi cả cặp access + refresh.
+    const refreshToken = useAuthStore.getState().refreshToken;
+    await apiPost("/api/auth/logout", refreshToken ? { refresh_token: refreshToken } : {});
+  } catch {
+    // best-effort: token sẽ hết hạn tự nhiên, phiên client vẫn bị xóa bên dưới
+  }
+  clearLocalSession();
+}
+
 // ---- Request: attach access token -------------------------------------------
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken;
@@ -44,7 +93,7 @@ api.interceptors.request.use((config) => {
 export let refreshPromise = null;
 
 export async function refreshAccessToken() {
-  const { refreshToken, setTokens, logout } = useAuthStore.getState();
+  const { refreshToken, setTokens } = useAuthStore.getState();
   if (!refreshToken) throw new Error("No refresh token");
 
   if (!refreshPromise) {
@@ -61,8 +110,14 @@ export async function refreshAccessToken() {
         return accessToken;
       })
       .catch((err) => {
-        logout();
-        redirectToLogin();
+        // Chỉ coi phiên là hết khi backend trả 401/403 (refresh token đã bị
+        // thu hồi/hết hạn). Lỗi mạng hoặc lỗi tạm thời (vd. Render cold start)
+        // thì KHÔNG logout: reject để UI hiện lỗi và user thử lại được.
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          clearLocalSession();
+          redirectToLogin();
+        }
         throw err;
       })
       .finally(() => {
@@ -100,14 +155,16 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${accessToken}`;
         return api(original);
       } catch {
-        // Store already cleared + redirected by refreshAccessToken().
+        // Refresh thất bại: nếu là 401/403 thì refreshAccessToken đã xóa
+        // phiên + chuyển về /login; lỗi mạng/transient thì chỉ reject để
+        // UI hiện lỗi và user thử lại, không đá user ra.
         return Promise.reject(error);
       }
     }
 
     // 401 on an auth call (bad credentials / expired refresh): session is over.
     if (status === 401 && original?.url?.includes("/api/auth/refresh")) {
-      useAuthStore.getState().logout();
+      clearLocalSession();
       redirectToLogin();
     }
     return Promise.reject(error);
@@ -127,10 +184,30 @@ export const apiDelete = (url, config) => api.delete(url, config).then((r) => r.
  * Auth endpoints — payload shapes mirror backend/app/blueprints/auth.py.
  * login() resolves: { user, access_token, refresh_token }
  * register() resolves: user object (no tokens; account starts as LEARNER)
+ * changePassword() resolves: { message, access_token, refresh_token }
+ *   (backend tăng token_version nên phải thay cặp token mới ngay)
  */
 export const authApi = {
   login: (email, password) => apiPost("/api/auth/login", { email, password }),
   register: ({ full_name, email, password }) =>
     apiPost("/api/auth/register", { full_name, email, password }),
   me: () => apiGet("/api/auth/me"),
+  logout: () => apiPost("/api/auth/logout", {}),
+  changePassword: ({ current_password, new_password }) =>
+    apiPost("/api/auth/change-password", { current_password, new_password }),
 };
+
+/**
+ * Nạp lại user từ GET /api/auth/me và cập nhật auth store, để topbar
+ * (XP/streak lấy từ user trong store) cập nhật ngay sau khi XP thay đổi
+ * — vd. sau khi nộp bài thành công hoặc nhận thưởng nhiệm vụ ngày.
+ * Lỗi thì im lặng: topbar giữ số cũ, không làm vỡ luồng chính.
+ */
+export async function refreshAuthUser() {
+  try {
+    const user = await authApi.me();
+    if (user) useAuthStore.getState().setUser(user);
+  } catch {
+    // topbar giữ số liệu cũ
+  }
+}

@@ -19,6 +19,8 @@ import { queryKeys } from "../../lib/queryKeys";
  * Props:
  *  - courseId: number
  *  - onNotify: (toast: { type: "success" | "error", message: string }) => void
+ *  - readOnly: boolean — TEACHER chỉ xem cây chương/bài, giấu các form
+ *    tạo chương/bài học (backend cũng chặn ghi bằng admin_only).
  *
  * API:
  *  - Đọc cây chương/bài: GET  /api/courses/:courseId/path        (đã có ở BE)
@@ -39,7 +41,7 @@ function getErrorMessage(err) {
 const smallInputClass =
   "h-9 rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#15803d] focus:outline-none focus:ring-2 focus:ring-[#15803d]/20";
 
-export default function LessonManager({ courseId, onNotify }) {
+export default function LessonManager({ courseId, onNotify, readOnly = false }) {
   const queryClient = useQueryClient();
   const [openUnits, setOpenUnits] = useState({});
   const [newUnitTitle, setNewUnitTitle] = useState("");
@@ -163,7 +165,9 @@ export default function LessonManager({ courseId, onNotify }) {
         <>
           {units.length === 0 ? (
             <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-center text-sm text-slate-500">
-              Khóa học chưa có chương nào. Thêm chương đầu tiên ở bên dưới.
+              {readOnly
+                ? "Khóa học chưa có chương nào."
+                : "Khóa học chưa có chương nào. Thêm chương đầu tiên ở bên dưới."}
             </p>
           ) : (
             <ul className="divide-y divide-slate-200 rounded-md border border-slate-200 bg-white">
@@ -192,26 +196,28 @@ export default function LessonManager({ courseId, onNotify }) {
                       <span className="text-xs text-slate-500">
                         {lessons.length} bài học
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveLessonUnit(
-                            activeLessonUnit === unit.id ? null : unit.id
-                          );
-                          setLessonError("");
-                          setLessonForms((prev) => ({
-                            ...prev,
-                            [unit.id]: {
-                              ...(prev[unit.id] || { title: "", xp: 10 }),
-                              nextIndex: lessons.length + 1,
-                            },
-                          }));
-                        }}
-                        className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Thêm bài học
-                      </button>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveLessonUnit(
+                              activeLessonUnit === unit.id ? null : unit.id
+                            );
+                            setLessonError("");
+                            setLessonForms((prev) => ({
+                              ...prev,
+                              [unit.id]: {
+                                ...(prev[unit.id] || { title: "", xp: 10 }),
+                                nextIndex: lessons.length + 1,
+                              },
+                            }));
+                          }}
+                          className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Thêm bài học
+                        </button>
+                      )}
                     </div>
 
                     {isOpen && (
@@ -250,7 +256,7 @@ export default function LessonManager({ courseId, onNotify }) {
                           </ul>
                         )}
 
-                        {activeLessonUnit === unit.id && (
+                        {activeLessonUnit === unit.id && !readOnly && (
                           <form
                             onSubmit={(e) => handleCreateLesson(e, unit)}
                             className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2.5"
@@ -311,33 +317,35 @@ export default function LessonManager({ courseId, onNotify }) {
             </ul>
           )}
 
-          {/* Form thêm chương — dùng API đã có ở BE */}
-          <form
-            onSubmit={handleCreateUnit}
-            className="mt-3 flex flex-wrap items-center gap-2"
-          >
-            <input
-              className={`${smallInputClass} min-w-56 flex-1 bg-white`}
-              placeholder="Tên chương mới, VD: Thì hiện tại đơn"
-              value={newUnitTitle}
-              onChange={(e) => setNewUnitTitle(e.target.value)}
-            />
-            <button
-              type="submit"
-              disabled={createUnitMutation.isPending}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#15803d] px-3 text-sm font-medium text-white hover:bg-[#166534] disabled:opacity-60"
+          {/* Form thêm chương — dùng API đã có ở BE; giấu ở chế độ chỉ đọc */}
+          {!readOnly && (
+            <form
+              onSubmit={handleCreateUnit}
+              className="mt-3 flex flex-wrap items-center gap-2"
             >
-              {createUnitMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="h-4 w-4" />
+              <input
+                className={`${smallInputClass} min-w-56 flex-1 bg-white`}
+                placeholder="Tên chương mới, VD: Thì hiện tại đơn"
+                value={newUnitTitle}
+                onChange={(e) => setNewUnitTitle(e.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={createUnitMutation.isPending}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#15803d] px-3 text-sm font-medium text-white hover:bg-[#166534] disabled:opacity-60"
+              >
+                {createUnitMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                Thêm chương
+              </button>
+              {unitError && (
+                <p className="w-full text-sm text-red-600">{unitError}</p>
               )}
-              Thêm chương
-            </button>
-            {unitError && (
-              <p className="w-full text-sm text-red-600">{unitError}</p>
-            )}
-          </form>
+            </form>
+          )}
         </>
       )}
     </div>

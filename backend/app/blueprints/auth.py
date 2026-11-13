@@ -7,6 +7,7 @@ Hợp đồng với frontend (không đổi):
 - GET  /me                -> data = user + current_streak (+ streak chi tiết)
 - POST /change-password   -> đổi mật khẩu, vô hiệu mọi token đã cấp trước đó
 - POST /logout            -> thu hồi token đang mang theo (access hoặc refresh)
+  + refresh token gửi kèm trong body (nếu có) để thu hồi cả cặp
 
 Nguyên tắc harden:
 - Role KHÔNG BAO GIỜ lấy từ request: đăng ký công khai luôn là LEARNER.
@@ -16,7 +17,12 @@ Nguyên tắc harden:
 from datetime import datetime, timezone
 
 from flask import Blueprint, request
-from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    jwt_required,
+)
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
@@ -58,10 +64,11 @@ def _streak_payload(user: User) -> dict:
     if not streak:
         return {"current_streak": 0,
                 "streak": {"current_streak": 0, "longest_streak": 0, "last_study_date": None}}
+    current = streak.display_current_streak()
     return {
-        "current_streak": streak.current_streak,
+        "current_streak": current,
         "streak": {
-            "current_streak": streak.current_streak,
+            "current_streak": current,
             "longest_streak": streak.longest_streak,
             "last_study_date": streak.last_study_date.isoformat() if streak.last_study_date else None,
         },
@@ -181,6 +188,17 @@ def change_password():
 @auth_bp.post("/logout")
 @jwt_required(verify_type=False)  # chấp nhận cả access lẫn refresh token
 def logout():
+    """Đăng xuất: thu hồi token mang theo + refresh token gửi kèm (nếu có).
+
+    Frontend gửi: ``Authorization: Bearer <access>`` kèm body
+    ``{"refresh_token": "<refresh>"}`` để cả cặp bị thu hồi — trước đây chỉ
+    access bị thu hồi nên refresh còn sống vẫn cấp được access mới trong
+    7 ngày. Refresh gửi kèm được decode + kiểm tra chữ ký, loại token và
+    chủ sở hữu trước khi thu hồi (không tin jti thô từ client). Token đã
+    hết hạn/sai thì bỏ qua im lặng vì nó vốn đã vô dụng. Client cũ không
+    gửi refresh vẫn đăng xuất được như trước (chỉ thu hồi token mang theo);
+    muốn đăng xuất mọi thiết bị thì dùng /logout-all.
+    """
     user = current_user()
     info = current_token_info()
     revoke_token(
@@ -189,7 +207,27 @@ def logout():
         user_id=user.id if user else None,
         expires_at=info["expires_at"],
     )
-    return ok({"message": "Đăng xuất thành công"})
+    body = request.get_json(silent=True) or {}
+    refresh_token = body.get("refresh_token")
+    revoked_refresh = False
+    if isinstance(refresh_token, str) and refresh_token:
+        try:
+            claims = decode_token(refresh_token)
+        except Exception:
+            claims = None  # hết hạn / sai chữ ký: vốn đã vô dụng, bỏ qua
+        if (claims is not None and claims.get("type") == "refresh"
+                and user is not None and claims.get("sub") == str(user.id)):
+            exp = claims.get("exp")
+            revoke_token(
+                claims.get("jti", ""),
+                token_type="refresh",
+                user_id=user.id,
+                expires_at=(datetime.fromtimestamp(exp, tz=timezone.utc)
+                            if exp else None),
+            )
+            revoked_refresh = True
+    return ok({"message": "Đăng xuất thành công",
+               "refresh_revoked": revoked_refresh})
 
 
 @auth_bp.post("/logout-all")

@@ -102,6 +102,21 @@ class Streak(db.Model):
 
     user = db.relationship("User", back_populates="streak")
 
+    def display_current_streak(self, today: date | None = None) -> int:
+        """Streak hiển thị: 0 nếu đã nghỉ quá 1 ngày (chỉ sửa lúc đọc).
+
+        ``current_streak`` trong DB chỉ được cập nhật khi học (touch), nên
+        một user nghỉ 1 tuần vẫn còn streak cũ trong DB. Khi đọc, nếu
+        last_study_date không phải hôm nay/hôm qua thì chuỗi đã đứt và phải
+        hiển thị 0 — không sửa DB ở đây, lần học tới touch() sẽ reset về 1.
+        """
+        today = today or date.today()
+        if self.last_study_date is None:
+            return 0
+        if (today - self.last_study_date).days <= 1:
+            return self.current_streak or 0
+        return 0
+
     def touch(self, today: date | None = None):
         today = today or date.today()
         if self.last_study_date == today:

@@ -9,7 +9,7 @@ import {
   ListChecks,
   RefreshCw,
 } from "lucide-react";
-import { apiGet, apiPost } from "../../lib/api";
+import { apiGet, apiPost, refreshAuthUser } from "../../lib/api";
 import * as sounds from "../../lib/sounds";
 import { useCountUp } from "../../hooks/useCountUp";
 import ExerciseRunner from "../../components/exercise/ExerciseRunner";
@@ -109,6 +109,8 @@ export default function LessonPage() {
     try {
       const data = await apiPost(`/api/lessons/${lessonId}/submit`, { answers });
       setResult(data ?? null);
+      // Nộp bài có thể cộng XP / đổi streak: nạp lại user để topbar cập nhật ngay.
+      refreshAuthUser();
       // Âm thanh phản hồi theo kết quả chấm (details từng câu từ BE):
       // đạt bài -> complete(); có câu đúng -> correct(); sai toàn bộ -> wrong().
       const details = data?.details ?? [];

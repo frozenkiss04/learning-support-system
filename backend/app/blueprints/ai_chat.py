@@ -16,7 +16,9 @@ from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, Response, current_app, request, stream_with_context
 from flask_jwt_extended import jwt_required
-from sqlalchemy import case, func
+from sqlalchemy import case, func, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from ..extensions import db, limiter
 from ..models.chat import ChatMessage, ChatSession
@@ -27,7 +29,7 @@ from ..models.review import ReviewCard
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
 from ..services import rag_service
 from ..services.ai_service import SYSTEM_ADMIN, SYSTEM_TUTOR, AiProviderError, AiService
-from ..services.progress_service import _normalize_answer
+from ..services.progress_service import _normalize_answer, award_xp
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
 
@@ -425,10 +427,21 @@ def sessions():
     limit = min(request.args.get("limit", 20, type=int) or 20, 50)
     rows = (ChatSession.query.filter_by(user_id=user.id)
             .order_by(ChatSession.id.desc()).limit(limit).all())
+    # Đếm message bằng 1 query GROUP BY thay vì len(s.messages) mỗi session
+    # (mỗi lần truy cập relationship là 1 query — N+1).
+    counts = {}
+    if rows:
+        session_ids = [s.id for s in rows]
+        counts = dict(
+            db.session.query(ChatMessage.session_id, func.count(ChatMessage.id))
+            .filter(ChatMessage.session_id.in_(session_ids))
+            .group_by(ChatMessage.session_id)
+            .all()
+        )
     return ok([{
         "id": s.id, "title": s.title, "context_type": s.context_type,
         "context_id": s.context_id,
-        "message_count": len(s.messages),
+        "message_count": counts.get(s.id, 0),
         "created_at": s.created_at.isoformat() if s.created_at else None,
     } for s in rows])
 
@@ -457,18 +470,26 @@ def _weak_lesson_ids(user, limit=3) -> list[int]:
         if lesson_id and lesson_id not in ordered:
             ordered.append(lesson_id)
 
-    cards = (ReviewCard.query.filter_by(user_id=user.id)
-             .order_by(ReviewCard.next_review_at.asc()).limit(10).all())
-    for card in cards:
-        exercise = db.session.get(Exercise, card.exercise_id)
-        if exercise is not None:
-            _add(exercise.lesson_id)
-    wrong = (Attempt.query.filter_by(user_id=user.id, is_correct=False)
-             .order_by(Attempt.created_at.desc(), Attempt.id.desc()).limit(10).all())
-    for attempt in wrong:
-        exercise = db.session.get(Exercise, attempt.exercise_id)
-        if exercise is not None:
-            _add(exercise.lesson_id)
+    # Join thẳng tới Exercise để lấy lesson_id trong cùng 1 query (trước đây
+    # mỗi thẻ/attempt lại db.session.get(Exercise) riêng — N+1).
+    card_lesson_ids = [
+        row[0] for row in
+        db.session.query(Exercise.lesson_id)
+        .join(ReviewCard, ReviewCard.exercise_id == Exercise.id)
+        .filter(ReviewCard.user_id == user.id)
+        .order_by(ReviewCard.next_review_at.asc()).limit(10).all()
+    ]
+    for lesson_id in card_lesson_ids:
+        _add(lesson_id)
+    wrong_lesson_ids = [
+        row[0] for row in
+        db.session.query(Exercise.lesson_id)
+        .join(Attempt, Attempt.exercise_id == Exercise.id)
+        .filter(Attempt.user_id == user.id, Attempt.is_correct.is_(False))
+        .order_by(Attempt.created_at.desc(), Attempt.id.desc()).limit(10).all()
+    ]
+    for lesson_id in wrong_lesson_ids:
+        _add(lesson_id)
     return ordered[:limit]
 
 
@@ -645,7 +666,19 @@ def practice_generate():
                            ensure_ascii=False),
     )
     db.session.add(practice_set)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Race: 2 request generate song song cùng qua bước kiểm tra
+        # "existing" ở trên — unique (user_id, set_date) giữ một bộ, bên
+        # thua lấy lại bộ đã có thay vì 500 (mẫu quest claim).
+        db.session.rollback()
+        existing = (AiPracticeSet.query.filter_by(user_id=user.id, set_date=today)
+                    .order_by(AiPracticeSet.id.desc()).first())
+        if existing is None:
+            return fail("Không tạo được bộ bài luyện tập, vui lòng thử lại", 409)
+        return ok({"set_id": existing.id, "generated_by": existing.generated_by,
+                   "exercises": existing.public_exercises()})
     return ok({"set_id": practice_set.id, "generated_by": generated_by,
                "exercises": practice_set.public_exercises()})
 
@@ -684,9 +717,20 @@ def practice_submit():
             "explanation": ex.get("explanation") or "",
         })
     xp_awarded = PRACTICE_XP_PER_CORRECT * correct
-    practice_set.graded = True
-    practice_set.xp_awarded = xp_awarded
-    user.xp = (user.xp or 0) + xp_awarded
+    # Đánh dấu đã chấm bằng UPDATE có điều kiện (graded=false): 2 lần nộp
+    # song song chỉ một bên cập nhật được row (rowcount=1), bên còn lại
+    # nhận 409 thay vì cộng XP 2 lần. Cách này đúng trên cả SQLite lẫn
+    # Postgres; SELECT ... FOR UPDATE không có tác dụng trên SQLite.
+    claimed = db.session.execute(
+        update(AiPracticeSet)
+        .where(AiPracticeSet.id == practice_set.id,
+               AiPracticeSet.graded.is_(False))
+        .values(graded=True, xp_awarded=xp_awarded)
+    )
+    if claimed.rowcount == 0:
+        db.session.rollback()
+        return fail("Bộ bài luyện tập này đã được chấm rồi", 409)
+    award_xp(user.id, xp_awarded)
     db.session.commit()
     return ok({"set_id": practice_set.id, "correct": correct,
                "total": len(details), "xp_awarded": xp_awarded,
@@ -699,7 +743,9 @@ def session_detail(session_id):
     user = current_user()
     if not user:
         return fail("Phiên đăng nhập không hợp lệ", 401)
-    session = ChatSession.query.filter_by(id=session_id, user_id=user.id).first()
+    session = (ChatSession.query
+               .options(selectinload(ChatSession.messages))
+               .filter_by(id=session_id, user_id=user.id).first())
     if not session:
         return fail("Không tìm thấy phiên chat", 404)
     return ok({

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, BookOpen, Check, ClipboardList, Gift, Layers, Pencil, PencilLine, Play, Search, Target, Volume2, VolumeX } from 'lucide-react';
 
-import { apiGet, apiPost } from '../../lib/api';
+import { apiGet, apiPost, refreshAuthUser } from '../../lib/api';
 import { useCountUp } from '../../hooks/useCountUp';
 import * as sounds from '../../lib/sounds';
 import CommandPalette from '../../components/search/CommandPalette';
@@ -120,6 +120,8 @@ function DailyQuestsCard() {
       await apiPost('/api/progress/quests/claim', {});
       setJustClaimed(true);
       setCelebrate(true);
+      // Nhận thưởng cộng XP: nạp lại user để topbar cập nhật ngay.
+      refreshAuthUser();
       try {
         sounds.complete();
       } catch {

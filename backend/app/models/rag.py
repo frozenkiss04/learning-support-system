@@ -21,6 +21,12 @@ class KnowledgeChunk(db.Model):
     title = db.Column(db.String(300), nullable=False, default="")
     content = db.Column(db.Text, nullable=False)
     embedding = db.Column(db.Text, nullable=False)  # JSON list[float]
+    # Embedder đã sinh vector này — để phát hiện index lỗi thời khi đổi mode
+    # (local <-> gemini) hoặc đổi dim, rồi build lại ở bước seed/deploy.
+    # NULL = chunk tạo trước khi có 2 cột này (chỉ còn kiểm tra bằng độ dài
+    # vector khi retrieve).
+    embedding_mode = db.Column(db.String(20), nullable=True)
+    embedding_dim = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
