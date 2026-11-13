@@ -29,6 +29,7 @@ from ..models.review import ReviewCard
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
 from ..services import rag_service
 from ..services.ai_service import SYSTEM_ADMIN, SYSTEM_TUTOR, AiProviderError, AiService
+from ..services.canned_responses import match_canned_response
 from ..services.progress_service import _normalize_answer, award_xp
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
@@ -313,6 +314,28 @@ def _save_assistant(session, content):
     db.session.commit()
 
 
+def _canned_reply(session, message):
+    """Trả lời sẵn cho chat nhập vai (ROLEPLAY) — None nếu không khớp.
+
+    Chỉ áp dụng cho nhánh ROLEPLAY; LESSON/ADMIN luôn đi qua provider AI.
+    Scenario lấy từ lượt chat hiện tại (``session._roleplay_scenario``,
+    do ``_prepare_turn`` gắn); lượt nối tiếp không gửi scenario thì chỉ
+    xét danh sách chung. Log ở mức INFO cả 2 phía (khớp/không khớp) để
+    sau này đo được tỉ lệ lượt chat tiết kiệm token.
+    """
+    if session.context_type != "ROLEPLAY":
+        return None
+    scenario = getattr(session, "_roleplay_scenario", None)
+    match = match_canned_response(message, scenario=scenario)
+    if match is None:
+        logger.info("ai chat canned miss: scenario=%s — fallback to provider",
+                    scenario or "-")
+        return None
+    logger.info("ai chat canned hit: scenario=%s method=%s trigger=%r",
+                scenario or "-", match.method, match.trigger)
+    return match
+
+
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
@@ -328,6 +351,18 @@ def chat():
     session, system, error = _prepare_turn(user, body)
     if error:
         return error
+    # Trả lời sẵn (ROLEPLAY): khớp thì trả ngay, không gọi provider AI.
+    canned = _canned_reply(session, (body.get("message") or "").strip())
+    if canned is not None:
+        _save_assistant(session, canned.reply)
+        return ok({
+            "session_id": session.id,
+            "context_type": session.context_type,
+            "reply": canned.reply,
+            "provider": "canned",
+            "stub": False,
+            "source": "canned",
+        })
     history = _history(session)
     rag_extra, rag_titles = _rag_context(session, history)
     if rag_extra:
@@ -347,6 +382,7 @@ def chat():
         "reply": reply,
         "provider": service.provider,
         "stub": service.is_stub,
+        "source": "ai",
     })
 
 
@@ -361,7 +397,9 @@ def chat_stream():
     ``{"type": "sources", "sources": [...]}`` (khi có RAG) →
     ``{"type": "delta", "delta": "..."}`` * n →
     ``{"type": "error", "message": "..."}`` khi provider lỗi, cuối là
-    ``data: [DONE]``.
+    ``data: [DONE]``. Meta mang thêm ``"source": "canned"`` khi lượt
+    ROLEPLAY được trả từ danh sách trả lời sẵn (1 delta duy nhất),
+    ``"source": "ai"`` khi đi qua provider.
     """
     user = current_user()
     if not user:
@@ -370,9 +408,24 @@ def chat_stream():
     session, system, error = _prepare_turn(user, body)
     if error:
         return error
+    session_id = session.id
+    # Trả lời sẵn (ROLEPLAY): cùng định dạng SSE (meta → delta → [DONE])
+    # như luồng provider, chỉ khác meta mang source="canned" và toàn bộ
+    # câu trả lời đi trong 1 delta duy nhất (trả ngay, không chờ stream).
+    canned = _canned_reply(session, (body.get("message") or "").strip())
+    if canned is not None:
+        @stream_with_context
+        def generate_canned():
+            yield (f"data: {json.dumps({'type': 'meta', 'session_id': session_id, 'provider': 'canned', 'stub': False, 'source': 'canned'})}\n\n")
+            yield f"data: {json.dumps({'type': 'delta', 'delta': canned.reply}, ensure_ascii=False)}\n\n"
+            _save_assistant(session, canned.reply)
+            yield "data: [DONE]\n\n"
+
+        return Response(generate_canned(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no"})
     service = AiService()
     history = _history(session)
-    session_id = session.id
     max_tokens = 400 if session.context_type == "ROLEPLAY" else None
 
     @stream_with_context
@@ -380,7 +433,7 @@ def chat_stream():
         import time
 
         started = time.monotonic()
-        yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id, 'provider': service.provider, 'stub': service.is_stub})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id, 'provider': service.provider, 'stub': service.is_stub, 'source': 'ai'})}\n\n"
         # RAG chạy bên trong generator (sau khi meta đã gửi) để giao diện
         # hiện trạng thái trả lời ngay, không phải chờ embedding xong mới
         # nhận được byte đầu tiên.
