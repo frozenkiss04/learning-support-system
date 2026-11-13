@@ -262,13 +262,6 @@ export default function LearnPage() {
     }
   });
   const [editingGoal, setEditingGoal] = useState(false);
-  const todayKey = useMemo(() => {
-    const now = new Date();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    return `${now.getFullYear()}-${mm}-${dd}`;
-  }, []);
-  const [xpBaseline, setXpBaseline] = useState(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setBarReady(true), 60);
@@ -300,31 +293,11 @@ export default function LearnPage() {
     queryKey: ['progress-summary'],
     queryFn: () => apiGet('/api/progress/summary'),
   });
-  const totalXp = summaryQuery.data?.xp;
-
-  // Baseline ngày: XP tổng ở lần mở trang đầu tiên trong ngày.
-  // XP hôm nay = XP tổng hiện tại - baseline (không âm).
-  useEffect(() => {
-    if (typeof totalXp !== 'number') return;
-    const key = `lss-xp-baseline-${todayKey}`;
-    try {
-      const stored = window.localStorage.getItem(key);
-      if (stored == null) {
-        window.localStorage.setItem(key, String(totalXp));
-        setXpBaseline(totalXp);
-      } else {
-        const parsed = Number(stored);
-        setXpBaseline(Number.isFinite(parsed) ? parsed : totalXp);
-      }
-    } catch {
-      setXpBaseline(totalXp);
-    }
-  }, [totalXp, todayKey]);
-
-  const todayXp =
-    typeof totalXp === 'number' && xpBaseline != null
-      ? Math.max(0, totalXp - xpBaseline)
-      : 0;
+  // XP hôm nay do backend tính (nguồn sự thật duy nhất): tổng XP kiếm được
+  // trong ngày UTC — nộp bài đạt, nhận thưởng nhiệm vụ, luyện tập AI.
+  // Không dùng baseline localStorage nữa: baseline bị xóa khi đăng xuất nên
+  // đăng nhập lại sau khi đã kiếm XP sẽ hiển thị 0/goal bền vững.
+  const todayXp = summaryQuery.data?.today_xp ?? 0;
   const goalPercent =
     dailyGoal > 0 ? Math.min(100, Math.round((todayXp / dailyGoal) * 100)) : 0;
   const goalReached = todayXp >= dailyGoal;

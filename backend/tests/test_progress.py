@@ -178,3 +178,55 @@ def test_activity_days_param_out_of_range_still_200(client, sample_course, learn
         resp = client.get(f"/api/progress/activity{query}", headers=learner_headers)
         assert resp.status_code == 200
         assert resp.get_json()["data"]["total_actions"] > 0
+
+
+# ---------------------------------------------------------------------------
+# GET /api/progress/summary — today_xp (XP kiếm được trong ngày UTC)
+# ---------------------------------------------------------------------------
+
+def _summary(client, headers):
+    resp = client.get("/api/progress/summary", headers=headers)
+    assert resp.status_code == 200
+    return resp.get_json()["data"]
+
+
+def test_summary_today_xp_after_passing_submit(client, sample_course, learner_headers):
+    assert _summary(client, learner_headers)["today_xp"] == 0
+
+    _submit(client, sample_course, sample_course["correct_answers"], learner_headers)
+
+    data = _summary(client, learner_headers)
+    assert data["today_xp"] == sample_course["lesson_xp"]
+    assert data["xp"] == sample_course["lesson_xp"]
+
+
+def test_summary_today_xp_stays_zero_after_failing_submit(
+        client, sample_course, learner_headers):
+    _submit(client, sample_course, sample_course["wrong_answers"], learner_headers)
+
+    assert _summary(client, learner_headers)["today_xp"] == 0
+
+
+def test_summary_today_xp_excludes_yesterday_activity(
+        client, sample_course, learner, learner_headers):
+    """Dữ liệu hôm qua (UTC) ở cả 3 nguồn XP đều không tính vào today_xp."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.extensions import db
+    from app.models.gamification import UserQuestClaim
+    from app.models.learning import UserProgress
+    from app.models.practice import AiPracticeSet
+
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday_dt = datetime.now(timezone.utc) - timedelta(days=1)
+    db.session.add(UserProgress(
+        user_id=learner.id, lesson_id=sample_course["lesson_id"],
+        status="COMPLETED", score=100, completed_at=yesterday_dt))
+    db.session.add(UserQuestClaim(
+        user_id=learner.id, quest_date=yesterday, xp_awarded=30))
+    db.session.add(AiPracticeSet(
+        user_id=learner.id, set_date=yesterday, payload="{}",
+        graded=True, xp_awarded=20))
+    db.session.commit()
+
+    assert _summary(client, learner_headers)["today_xp"] == 0

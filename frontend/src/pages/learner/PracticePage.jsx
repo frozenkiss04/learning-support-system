@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Brain, CheckCircle2, ChevronRight, Loader2, RotateCcw, Sparkles, Trophy, XCircle } from 'lucide-react';
 import { apiPost, refreshAuthUser } from '../../lib/api';
+import { queryClient } from '../../lib/queryClient';
 import * as sounds from '../../lib/sounds';
 
 /**
@@ -44,6 +45,9 @@ export default function PracticePage() {
       setPhase('result');
       // Nộp bài cộng XP: nạp lại user để topbar cập nhật ngay.
       refreshAuthUser();
+      // Luyện tập cộng XP hôm nay: làm mới summary để "Mục tiêu hôm nay"
+      // ở /learn cập nhật ngay khi quay lại.
+      queryClient.invalidateQueries({ queryKey: ['progress-summary'] });
       if (data.total > 0 && data.correct / data.total >= 0.8) sounds.complete();
       else sounds.correct();
     } catch (err) {

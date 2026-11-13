@@ -2,7 +2,7 @@
 
 Hợp đồng với frontend (không đổi):
 - POST /register          -> 201, data = user.to_dict()
-- POST /login             -> data = {user, access_token, refresh_token}
+- POST /login             -> data = {user (+ current_streak), access_token, refresh_token}
 - POST /refresh           -> data = {access_token}
 - GET  /me                -> data = user + current_streak (+ streak chi tiết)
 - POST /change-password   -> đổi mật khẩu, vô hiệu mọi token đã cấp trước đó
@@ -126,7 +126,12 @@ def login():
 
     user.last_login_at = datetime.now(timezone.utc)
     db.session.commit()
-    return ok({"user": user.to_dict(), **_issue_tokens(user)})
+    # Kèm current_streak ngay từ lúc đăng nhập (giống /me): topbar/sidebar
+    # đọc streak từ user trong auth store, mà store chỉ được nạp lại khi mở
+    # /profile — không có trường này thì streak hiển thị 0 sau đăng nhập lại.
+    data = user.to_dict()
+    data.update(_streak_payload(user))
+    return ok({"user": data, **_issue_tokens(user)})
 
 
 @auth_bp.post("/refresh")

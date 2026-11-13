@@ -4,7 +4,7 @@ Registered by the app factory under ``/api/progress``:
 
 - ``GET  /due``                    review cards that are due now
 - ``POST /review/<exercise_id>``   grade one review answer, reschedule its card
-- ``GET  /summary``                XP, streak, completed lessons, due count
+- ``GET  /summary``                XP, streak, today_xp, completed lessons, due count
 - ``GET  /activity``               per-day study activity (heatmap data)
 - ``GET  /quests``                 today's daily quests + claim state
 - ``POST /quests/claim``           claim the all-quests-done XP bonus (once/day)
@@ -21,6 +21,7 @@ from ..extensions import db
 from ..models.course import Course, Unit
 from ..models.gamification import UserQuestClaim
 from ..models.learning import Attempt, Exercise, Lesson, Streak, UserProgress
+from ..models.practice import AiPracticeSet
 from ..models.review import ReviewCard
 from ..models.user import ROLE_ADMIN, ROLE_TEACHER, User
 from ..services.progress_service import award_xp
@@ -111,13 +112,58 @@ def summary():
     completed = UserProgress.query.filter_by(
         user_id=user.id, status="COMPLETED"
     ).count()
+    today = datetime.now(timezone.utc).date()
     return ok({
         "xp": user.xp,
         "current_streak": streak.display_current_streak() if streak else 0,
         "longest_streak": streak.longest_streak if streak else 0,
         "completed_lessons": completed,
         "due_reviews": due_count(user.id),
+        "today_xp": _today_xp(user.id, today),
     })
+
+
+def _today_xp(user_id, today):
+    """Tổng XP kiếm được trong một ngày UTC — nguồn sự thật duy nhất cho
+    "Mục tiêu hôm nay" ở frontend (trước đây frontend tự tính bằng baseline
+    localStorage, bị xóa khi đăng xuất nên đăng nhập lại hiển thị 0/goal
+    bền vững dù đã kiếm XP trong ngày).
+
+    Cộng đủ cả 3 nguồn gọi award_xp() trong codebase, cùng ngày UTC như
+    quests (xem _daily_quests):
+    - nộp bài đạt: Lesson.xp_reward, qua UserProgress COMPLETED có
+      completed_at trong ngày (tái dùng pattern của weekly_league);
+    - nhận thưởng nhiệm vụ: UserQuestClaim.xp_awarded với quest_date = ngày;
+    - luyện tập AI: AiPracticeSet.xp_awarded của bộ đã chấm (graded) có
+      set_date = ngày.
+
+    Lưu ý: AiPracticeSet không có cột "ngày chấm" — set_date là ngày tạo bộ.
+    Bộ tạo hôm trước mà nộp hôm sau thì XP đó không rơi vào today_xp của
+    ngày nào (hiếm: bộ luyện tập là bộ trong ngày, frontend tạo rồi nộp
+    trong cùng ngày).
+    """
+    lesson_xp = (
+        db.session.query(func.coalesce(func.sum(Lesson.xp_reward), 0))
+        .join(UserProgress, UserProgress.lesson_id == Lesson.id)
+        .filter(UserProgress.user_id == user_id,
+                UserProgress.status == "COMPLETED",
+                func.date(UserProgress.completed_at) == today)
+        .scalar()
+    )
+    quest_xp = (
+        db.session.query(func.coalesce(func.sum(UserQuestClaim.xp_awarded), 0))
+        .filter(UserQuestClaim.user_id == user_id,
+                UserQuestClaim.quest_date == today)
+        .scalar()
+    )
+    practice_xp = (
+        db.session.query(func.coalesce(func.sum(AiPracticeSet.xp_awarded), 0))
+        .filter(AiPracticeSet.user_id == user_id,
+                AiPracticeSet.set_date == today,
+                AiPracticeSet.graded.is_(True))
+        .scalar()
+    )
+    return int(lesson_xp or 0) + int(quest_xp or 0) + int(practice_xp or 0)
 
 
 @progress_bp.get("/activity")

@@ -59,6 +59,26 @@ export default function LearnerLayout() {
             : payload?.data
         const due = Number(summary?.due_reviews ?? 0)
         if (Number.isFinite(due) && due >= 0) setDueCount(due)
+        // Đồng bộ streak + XP tươi từ CÙNG response này vào auth store:
+        // snapshot user lúc đăng nhập có thể đã cũ (streak 0) cho tới khi
+        // mở /profile — topbar/sidebar đọc từ store nên phải cập nhật ở đây.
+        // Chỉ ghi khi giá trị thật sự đổi để tránh ghi localStorage thừa.
+        const current = useAuthStore.getState().user
+        if (current) {
+          const freshStreak = Number(summary?.current_streak)
+          const freshXp = Number(summary?.xp)
+          const next = { ...current }
+          let changed = false
+          if (Number.isFinite(freshStreak) && freshStreak !== current.current_streak) {
+            next.current_streak = freshStreak
+            changed = true
+          }
+          if (Number.isFinite(freshXp) && freshXp !== current.xp) {
+            next.xp = freshXp
+            changed = true
+          }
+          if (changed) useAuthStore.getState().setUser(next)
+        }
       })
       .catch(() => {})
     return () => {

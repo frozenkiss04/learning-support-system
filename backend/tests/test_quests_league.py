@@ -166,3 +166,38 @@ def test_weekly_league_orders_by_weekly_xp(client, sample_course, learner, learn
     assert data["entries"][0]["is_me"] is False
     assert data["my_rank"] == 2
     assert data["tier"] == "Vàng"  # rank 2 is still in the 1-3 band
+
+
+def test_claim_adds_30_to_today_xp(client, sample_course, learner, learner_headers):
+    """Nhận thưởng nhiệm vụ (+30 XP) phải cộng vào summary.today_xp."""
+    _submit(client, sample_course, learner_headers)
+
+    # Top up today's activity directly: +7 attempts (10 total) and review
+    # cards for 2 extra exercises (5 distinct cards touched today).
+    extra_exercises = []
+    for idx in (4, 5):
+        ex = Exercise(
+            lesson_id=sample_course["lesson_id"], type="MULTIPLE_CHOICE",
+            question=f"Câu bổ sung {idx}", options=["A", "B"],
+            correct_answer="A", explanation="", order_index=idx,
+        )
+        db.session.add(ex)
+        extra_exercises.append(ex)
+    db.session.flush()
+    for ex in extra_exercises:
+        db.session.add(ReviewCard(user_id=learner.id, exercise_id=ex.id))
+    for ex_id in sample_course["exercise_ids"] * 2 + sample_course["exercise_ids"][:1]:
+        db.session.add(Attempt(user_id=learner.id, exercise_id=ex_id,
+                               answer="A", is_correct=True))
+    db.session.commit()
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    assert resp.get_json()["data"]["today_xp"] == sample_course["lesson_xp"]
+
+    resp = client.post("/api/progress/quests/claim", headers=learner_headers)
+    assert resp.status_code == 200
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    data = resp.get_json()["data"]
+    assert data["today_xp"] == sample_course["lesson_xp"] + 30
+    assert data["xp"] == sample_course["lesson_xp"] + 30

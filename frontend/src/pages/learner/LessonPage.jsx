@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { apiGet, apiPost, refreshAuthUser } from "../../lib/api";
+import { queryClient } from "../../lib/queryClient";
 import * as sounds from "../../lib/sounds";
 import { useCountUp } from "../../hooks/useCountUp";
 import ExerciseRunner from "../../components/exercise/ExerciseRunner";
@@ -111,6 +112,9 @@ export default function LessonPage() {
       setResult(data ?? null);
       // Nộp bài có thể cộng XP / đổi streak: nạp lại user để topbar cập nhật ngay.
       refreshAuthUser();
+      // Nộp bài đạt cộng XP hôm nay: làm mới summary để "Mục tiêu hôm nay"
+      // ở /learn cập nhật ngay khi quay lại (staleTime 60s nếu không invalidate).
+      queryClient.invalidateQueries({ queryKey: ['progress-summary'] });
       // Âm thanh phản hồi theo kết quả chấm (details từng câu từ BE):
       // đạt bài -> complete(); có câu đúng -> correct(); sai toàn bộ -> wrong().
       const details = data?.details ?? [];

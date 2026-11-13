@@ -233,3 +233,21 @@ def test_generate_new_user_without_weak_data_uses_bank_but_not_crash(client, sam
     data = resp.get_json()["data"]
     # Fixture mẫu chỉ có 3 bài tập nên bank trả tối đa 3 (production có 49).
     assert 1 <= len(data["exercises"]) <= 5
+
+
+def test_practice_submit_adds_xp_to_today_xp(
+        client, learner_headers, practice_content):
+    """Nộp luyện tập AI (3/5 câu đúng = 12 XP) phải cộng vào summary.today_xp."""
+    gen = client.post("/api/ai/practice/generate", headers=learner_headers)
+    set_id = gen.get_json()["data"]["set_id"]
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    assert resp.get_json()["data"]["today_xp"] == 0
+
+    resp = client.post("/api/ai/practice/submit", headers=learner_headers,
+                       json={"set_id": set_id, "answers": _answers_for(set_id, 3)})
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["xp_awarded"] == 12
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    assert resp.get_json()["data"]["today_xp"] == 12

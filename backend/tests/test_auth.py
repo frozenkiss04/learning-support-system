@@ -170,3 +170,36 @@ def test_refresh_rejects_access_token(client, learner_token):
     resp = client.post("/api/auth/refresh",
                        headers={"Authorization": f"Bearer {learner_token}"})
     assert resp.status_code == 401
+
+
+def test_login_response_includes_current_streak(client, learner):
+    """Đăng nhập trả current_streak trong user (topbar đọc từ store)."""
+    from conftest import LEARNER_EMAIL, LEARNER_PASSWORD
+
+    resp = client.post(LOGIN_URL, json={
+        "email": LEARNER_EMAIL, "password": LEARNER_PASSWORD,
+    })
+    assert resp.status_code == 200
+    user = resp.get_json()["data"]["user"]
+    assert user["current_streak"] == 0  # chưa có streak nào
+    assert user["streak"]["longest_streak"] == 0
+
+
+def test_login_response_includes_existing_streak(client, learner):
+    from datetime import date
+
+    from app.extensions import db
+    from app.models.learning import Streak
+    from conftest import LEARNER_EMAIL, LEARNER_PASSWORD
+
+    db.session.add(Streak(user_id=learner.id, current_streak=3,
+                          longest_streak=5, last_study_date=date.today()))
+    db.session.commit()
+
+    resp = client.post(LOGIN_URL, json={
+        "email": LEARNER_EMAIL, "password": LEARNER_PASSWORD,
+    })
+    assert resp.status_code == 200
+    user = resp.get_json()["data"]["user"]
+    assert user["current_streak"] == 3
+    assert user["streak"]["longest_streak"] == 5
