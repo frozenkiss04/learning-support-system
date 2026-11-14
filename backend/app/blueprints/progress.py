@@ -135,12 +135,9 @@ def _today_xp(user_id, today):
       completed_at trong ngày (tái dùng pattern của weekly_league);
     - nhận thưởng nhiệm vụ: UserQuestClaim.xp_awarded với quest_date = ngày;
     - luyện tập AI: AiPracticeSet.xp_awarded của bộ đã chấm (graded) có
-      set_date = ngày.
-
-    Lưu ý: AiPracticeSet không có cột "ngày chấm" — set_date là ngày tạo bộ.
-    Bộ tạo hôm trước mà nộp hôm sau thì XP đó không rơi vào today_xp của
-    ngày nào (hiếm: bộ luyện tập là bộ trong ngày, frontend tạo rồi nộp
-    trong cùng ngày).
+      graded_at trong ngày — ngày chấm, không phải ngày tạo bộ (set_date),
+      để bộ tạo hôm trước nộp hôm sau vẫn tính vào "Mục tiêu hôm nay" của
+      ngày nộp.
     """
     lesson_xp = (
         db.session.query(func.coalesce(func.sum(Lesson.xp_reward), 0))
@@ -159,7 +156,7 @@ def _today_xp(user_id, today):
     practice_xp = (
         db.session.query(func.coalesce(func.sum(AiPracticeSet.xp_awarded), 0))
         .filter(AiPracticeSet.user_id == user_id,
-                AiPracticeSet.set_date == today,
+                func.date(AiPracticeSet.graded_at) == today,
                 AiPracticeSet.graded.is_(True))
         .scalar()
     )

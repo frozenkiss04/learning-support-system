@@ -778,7 +778,8 @@ def practice_submit():
         update(AiPracticeSet)
         .where(AiPracticeSet.id == practice_set.id,
                AiPracticeSet.graded.is_(False))
-        .values(graded=True, xp_awarded=xp_awarded)
+        .values(graded=True, xp_awarded=xp_awarded,
+                graded_at=datetime.now(timezone.utc))
     )
     if claimed.rowcount == 0:
         db.session.rollback()

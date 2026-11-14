@@ -26,6 +26,7 @@ class AiPracticeSet(db.Model):
     #        [{id, type, question, options?, correct_answer, explanation}]}
     payload = db.Column(db.Text, nullable=False, default="{}")
     graded = db.Column(db.Boolean, nullable=False, default=False)
+    graded_at = db.Column(db.DateTime, nullable=True)
     xp_awarded = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=_utcnow)
 

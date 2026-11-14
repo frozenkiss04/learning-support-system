@@ -251,3 +251,37 @@ def test_practice_submit_adds_xp_to_today_xp(
 
     resp = client.get("/api/progress/summary", headers=learner_headers)
     assert resp.get_json()["data"]["today_xp"] == 12
+
+
+def test_practice_submit_next_day_counts_xp_on_graded_day(
+        client, learner, learner_headers, practice_content):
+    """Bộ tạo hôm trước, nộp hôm sau: XP phải tính vào today_xp của ngày nộp.
+
+    Hồi quy cho lỗi cũ: _today_xp khớp set_date (ngày tạo bộ) nên XP của bộ
+    lệch ngày không rơi vào ngày nào. Giờ tính theo graded_at (ngày chấm).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    gen = client.post("/api/ai/practice/generate", headers=learner_headers)
+    set_id = gen.get_json()["data"]["set_id"]
+
+    # Giả lập bộ được tạo hôm qua (UTC): chỉ dời set_date, chưa chấm.
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    practice_set = db.session.get(AiPracticeSet, set_id)
+    practice_set.set_date = yesterday
+    db.session.commit()
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    assert resp.get_json()["data"]["today_xp"] == 0
+
+    resp = client.post("/api/ai/practice/submit", headers=learner_headers,
+                       json={"set_id": set_id, "answers": _answers_for(set_id, 3)})
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["xp_awarded"] == 12
+
+    graded = db.session.get(AiPracticeSet, set_id)
+    assert graded.graded is True
+    assert graded.graded_at is not None
+
+    resp = client.get("/api/progress/summary", headers=learner_headers)
+    assert resp.get_json()["data"]["today_xp"] == 12

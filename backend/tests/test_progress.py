@@ -226,7 +226,7 @@ def test_summary_today_xp_excludes_yesterday_activity(
         user_id=learner.id, quest_date=yesterday, xp_awarded=30))
     db.session.add(AiPracticeSet(
         user_id=learner.id, set_date=yesterday, payload="{}",
-        graded=True, xp_awarded=20))
+        graded=True, graded_at=yesterday_dt, xp_awarded=20))
     db.session.commit()
 
     assert _summary(client, learner_headers)["today_xp"] == 0
