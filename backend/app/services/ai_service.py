@@ -17,11 +17,13 @@ lỗi sau retry nội bộ, tự chuyển sang đường OpenAI-compatible
 Xoay model Gemini (luôn bật, không cần opt-in): khi model chính lỗi do
 hết quota/tải (429/503/timeout), tự thử các model Gemini khác theo thứ tự
 (``AI_MODEL`` rồi ``AI_GEMINI_FALLBACK_MODELS``, mặc định
-``gemini-2.5-flash,gemini-2.0-flash``) — quota free của Gemini tính theo
-từng model nên xoay model thường qua được lỗi 429 ngay. Chỉ xoay khi lỗi
-có thể thử lại được: nội dung bị chặn an toàn (``FRIENDLY_BLOCKED``) thì
-báo lỗi ngay thay vì đốt cả chuỗi model. Toàn bộ chuỗi xoay + failover
-chạy trong ngân sách 60 giây, hết giờ thì dừng và báo lỗi gốc.
+``gemini-3.6-flash,gemini-3.5-flash-lite`` — cả hai đều Stable, thế hệ 3.x
+hiện tại; 2.5-flash/2.0-flash đã bị Google gỡ với user mới từ 2026 nên
+không dùng nữa) — quota free của Gemini tính theo từng model nên xoay
+model thường qua được lỗi 429 ngay. Chỉ xoay khi lỗi có thể thử lại
+được: nội dung bị chặn an toàn (``FRIENDLY_BLOCKED``) thì báo lỗi ngay
+thay vì đốt cả chuỗi model. Toàn bộ chuỗi xoay + failover chạy trong
+ngân sách 60 giây, hết giờ thì dừng và báo lỗi gốc.
 
 API keys are read from env only — never hardcode them here.
 Provider failures (timeout, HTTP error, malformed payload) raise
@@ -96,13 +98,13 @@ class AiService:
         self.provider = (provider or os.getenv("AI_PROVIDER", "gemini")).strip().lower()
         self.model = model or os.getenv("AI_MODEL") or _DEFAULT_MODELS.get(self.provider, "")
         try:
-            self.timeout = timeout or float(os.getenv("AI_TIMEOUT_SECONDS", "30"))
+            self.timeout = timeout or float(os.getenv("AI_TIMEOUT_SECONDS", "20"))
         except ValueError:
-            self.timeout = 30.0
+            self.timeout = 20.0
         # Đường streaming dùng timeout đọc ngắn hơn: Gemini "treo" không nhả
-        # ký tự nào quá 15 giây thì nên nhường cho failover thay vì bắt
-        # người dùng chờ hết 30 giây.
-        self.stream_timeout = min(self.timeout, 15.0)
+        # ký tự nào quá 10 giây thì nên nhường cho failover thay vì bắt
+        # người dùng chờ — model khỏe thì token đầu tới trong 1-5 giây.
+        self.stream_timeout = min(self.timeout, 10.0)
         try:
             self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "1024"))
         except ValueError:
@@ -124,7 +126,7 @@ class AiService:
         self.gemini_models = []
         for m in [self.model] + os.getenv(
                 "AI_GEMINI_FALLBACK_MODELS",
-                "gemini-2.5-flash,gemini-2.0-flash").split(","):
+                "gemini-3.6-flash,gemini-3.5-flash-lite").split(","):
             m = (m or "").strip()
             if m and m not in self.gemini_models:
                 self.gemini_models.append(m)

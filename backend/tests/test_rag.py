@@ -189,6 +189,24 @@ def test_index_stale_on_gemini_dim_mismatch(sample_course, monkeypatch):
     assert rag_service._index_is_stale() is False
 
 
+def test_index_stale_when_provenance_missing(sample_course, monkeypatch):
+    # Hàng cũ không ghi embedding_dim/mode (NULL): từng làm cả backfill
+    # pgvector lẫn kiểm tra lỗi thời đều bỏ qua, index mãi không có vector.
+    rag_service.build_index()
+    monkeypatch.setattr(rag_service, "embedding_mode", lambda: "gemini")
+    db.session.query(KnowledgeChunk).update(
+        {"embedding_mode": "gemini", "embedding_dim": 3072})
+    db.session.commit()
+    assert rag_service._index_is_stale() is False
+    db.session.query(KnowledgeChunk).update({"embedding_dim": None})
+    db.session.commit()
+    assert rag_service._index_is_stale() is True
+    db.session.query(KnowledgeChunk).update(
+        {"embedding_dim": 3072, "embedding_mode": None})
+    db.session.commit()
+    assert rag_service._index_is_stale() is True
+
+
 def test_search_backend_is_python_on_sqlite(sample_course):
     rag_service.build_index()
     assert rag_service.search_backend() == "python"

@@ -10,10 +10,19 @@ from .extensions import cors, db, jwt, limiter, migrate
 
 def create_app(config_object=Config):
     # Cho phép log INFO của package app (vd thời gian phản hồi AI stream)
-    # hiện trên Render — mặc định root logger ở WARNING sẽ nuốt chúng.
-    logging.getLogger("app").setLevel(
+    # hiện trên Render — chỉ đặt level là chưa đủ: Gunicorn không gắn
+    # handler cho root logger nên log INFO bị lastResort (WARNING) nuốt.
+    # Gắn handler riêng và tắt propagate để không in trùng dòng WARNING.
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(
         getattr(logging, os.getenv("APP_LOG_LEVEL", "INFO").upper(),
                 logging.INFO))
+    if not app_logger.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        app_logger.addHandler(_handler)
+        app_logger.propagate = False
 
     app = Flask(__name__)
     app.config.from_object(config_object)

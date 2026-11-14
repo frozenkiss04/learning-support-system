@@ -372,14 +372,19 @@ def _index_is_stale() -> bool:
         return True
     mode = embedding_mode()
     for stored_mode, stored_dim in chunks:
-        if stored_mode is not None and stored_mode != mode:
+        if stored_mode is None or stored_dim is None:
+            # Hàng cũ không ghi lại embedder/dim — không chứng minh được
+            # là khớp với embedder hiện tại nên build lại cho chắc (từng
+            # xảy ra thật: chunk dim NULL làm cả backfill pgvector lẫn
+            # kiểm tra lỗi thời đều bỏ qua, index mãi không có vector).
             return True
-        if stored_dim is not None and mode == "local" and stored_dim != DIM:
+        if stored_mode != mode:
+            return True
+        if mode == "local" and stored_dim != DIM:
             return True
         # Gemini: vector 768 dim (text-embedding-004 cũ) không dùng chung
         # được với 3072 dim (gemini-embedding-001) — lệch dim là build lại.
-        if (stored_dim is not None and mode == "gemini"
-                and stored_dim != GEMINI_DIM):
+        if mode == "gemini" and stored_dim != GEMINI_DIM:
             return True
     return False
 

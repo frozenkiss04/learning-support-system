@@ -394,7 +394,7 @@ def test_chat_fallback_chain_reaches_roulette_last(monkeypatch, calls):
 # ---------------------------------------------------------------------------
 
 def test_gemini_rotates_to_next_model_on_503(monkeypatch, calls):
-    """Model chính 503 -> xoay sang gemini-2.5-flash, KHÔNG cần bật fallback."""
+    """Model chính 503 -> xoay sang gemini-3.6-flash, KHÔNG cần bật fallback."""
     tried = []
 
     def handler(url, kwargs):
@@ -410,8 +410,8 @@ def test_gemini_rotates_to_next_model_on_503(monkeypatch, calls):
     service = _service(monkeypatch, fallback=None)  # fallback TẮT
     assert service.chat(MESSAGES) == "trả lời từ model xoay"
     assert tried.count("gemini-3.8-flash") == 2  # 1 lần + 1 retry
-    assert tried.count("gemini-2.5-flash") == 1
-    assert "gemini-2.0-flash" not in tried  # dừng ngay khi có model trả lời
+    assert tried.count("gemini-3.6-flash") == 1
+    assert "gemini-3.5-flash-lite" not in tried  # dừng ngay khi có model trả lời
 
 
 def test_blocked_prompt_does_not_rotate(monkeypatch, calls):
@@ -455,4 +455,4 @@ def test_stream_rotates_to_next_gemini_model(monkeypatch, calls):
     service = _service(monkeypatch, fallback=None)
     assert "".join(service.stream(MESSAGES)) == "xoay stream ok"
     assert tried.count("gemini-3.8-flash") == 2  # 1 lần + 1 retry của _open_stream
-    assert tried.count("gemini-2.5-flash") == 1
+    assert tried.count("gemini-3.6-flash") == 1
