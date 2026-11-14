@@ -25,6 +25,16 @@ model thường qua được lỗi 429 ngay. Chỉ xoay khi lỗi có thể th�
 thay vì đốt cả chuỗi model. Toàn bộ chuỗi xoay + failover chạy trong
 ngân sách 60 giây, hết giờ thì dừng và báo lỗi gốc.
 
+Thinking: Gemini 3.x Flash mặc định suy nghĩ ở mức MEDIUM trước khi trả
+lời — với câu hỏi đơn giản, pha suy nghĩ im lặng này có thể kéo dài
+15–30 giây mà không nhả token nào, khiến stream tưởng như bị treo
+(đúng triệu chứng đã đo được: timeout 15s/30s trong khi model vẫn khỏe).
+Vì vậy mọi lệnh generate đều gửi ``thinkingConfig: {thinkingLevel:
+"LOW"}`` (mức thấp nhất mà 3.8-flash chấp nhận — MINIMAL bị model này
+từ chối, và không thể tắt thinking hoàn toàn trên Gemini 3). Với câu
+hỏi đơn giản, LOW thường bỏ qua hẳn pha suy nghĩ. Đổi qua env
+``AI_THINKING_LEVEL`` (LOW/MEDIUM/HIGH) nếu cần suy luận sâu hơn.
+
 API keys are read from env only — never hardcode them here.
 Provider failures (timeout, HTTP error, malformed payload) raise
 ``AiProviderError`` with a user-friendly Vietnamese message; the blueprint
@@ -120,9 +130,11 @@ class AiService:
             "AI_FALLBACK_ENABLED", "").strip().lower() in ("true", "1", "yes")
         self.fallback_model = (os.getenv("AI_FALLBACK_MODEL", "").strip()
                                or "llama-3.3-70b-versatile")
-        # Xoay model Gemini: model chính trước, rồi các model dự phòng
-        # (quota free tính theo từng model). Đọc env mỗi lần tạo service
-        # (1 instance/request) nên đổi env không cần restart.
+        # Mức suy nghĩ của Gemini 3.x (xem docstring module): LOW là mức
+        # thấp nhất an toàn cho mọi model trong chuỗi xoay (3.8-flash
+        # từ chối MINIMAL). Giá trị lạ thì về LOW thay vì để API 400.
+        level = os.getenv("AI_THINKING_LEVEL", "LOW").strip().upper()
+        self.thinking_level = level if level in ("LOW", "MEDIUM", "HIGH") else "LOW"
         self.gemini_models = []
         for m in [self.model] + os.getenv(
                 "AI_GEMINI_FALLBACK_MODELS",
@@ -491,7 +503,9 @@ class AiService:
                         for m in history
                     ],
                     "generationConfig": {
-                        "maxOutputTokens": max_tokens or self.max_tokens},
+                        "maxOutputTokens": max_tokens or self.max_tokens,
+                        "thinkingConfig": {
+                            "thinkingLevel": self.thinking_level}},
                 },
                 headers={"x-goog-api-key": self._keys["gemini"],
                          "Content-Type": "application/json"},
@@ -579,7 +593,9 @@ class AiService:
                     for m in history
                 ],
                 "generationConfig": {
-                    "maxOutputTokens": max_tokens or self.max_tokens},
+                    "maxOutputTokens": max_tokens or self.max_tokens,
+                    "thinkingConfig": {
+                        "thinkingLevel": self.thinking_level}},
             },
             headers={"x-goog-api-key": self._keys["gemini"],
                      "Content-Type": "application/json"},

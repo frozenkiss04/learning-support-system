@@ -456,3 +456,46 @@ def test_stream_rotates_to_next_gemini_model(monkeypatch, calls):
     assert "".join(service.stream(MESSAGES)) == "xoay stream ok"
     assert tried.count("gemini-3.8-flash") == 2  # 1 lần + 1 retry của _open_stream
     assert tried.count("gemini-3.6-flash") == 1
+
+
+# ---------------------------------------------------------------------------
+# Thinking: Gemini 3.x mặc định suy nghĩ MEDIUM (15-30s im lặng trước
+# token đầu) — gửi LOW để stream nhả token ngay với câu hỏi đơn giản.
+# ---------------------------------------------------------------------------
+
+def test_gemini_chat_sends_thinking_level_low(monkeypatch, calls):
+    seen = {}
+
+    def handler(url, kwargs):
+        seen["json"] = kwargs.get("json") or {}
+        return _gemini_ok("ok")
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    assert service.chat(MESSAGES) == "ok"
+    assert seen["json"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": "LOW"}
+
+
+def test_gemini_stream_sends_thinking_level_low(monkeypatch, calls):
+    seen = {}
+
+    def handler(url, kwargs):
+        seen["json"] = kwargs.get("json") or {}
+        return FakeStreamResp(_gemini_sse("ok"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch)
+    assert "".join(service.stream(MESSAGES)) == "ok"
+    assert seen["json"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": "LOW"}
+
+
+def test_thinking_level_env_override_and_invalid(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_THINKING_LEVEL", "high")
+    assert AiService().thinking_level == "HIGH"
+    monkeypatch.setenv("AI_THINKING_LEVEL", "minimal")  # 3.8-flash từ chối
+    assert AiService().thinking_level == "LOW"
+    monkeypatch.setenv("AI_THINKING_LEVEL", "không có")
+    assert AiService().thinking_level == "LOW"
