@@ -162,6 +162,8 @@ def rag_stats():
     return ok({
         "chunks": KnowledgeChunk.query.count(),
         "mode": rag_service.embedding_mode(),
+        "search_backend": rag_service.search_backend(),
+        "vector_chunks": rag_service.vector_chunks(),
         "lessons_indexed": lessons_indexed,
         "exercises_indexed": exercises_indexed,
     })

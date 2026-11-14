@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import requests
 
@@ -57,6 +58,13 @@ FRIENDLY_BLOCKED = (
 
 _DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "openai": "gpt-4o-mini"}
 _SUPPORTED = ("gemini", "openai", "stub")
+
+# Total budget for one chat()/stream() call including its fallback chain.
+# Without it, a primary failure followed by 3 fallback models — each with
+# its own retries and 30s timeouts — could keep the learner waiting for
+# minutes before the (inevitable) error surfaced. The deadline only cuts
+# off *fallback* attempts; the primary call always gets its full budget.
+_FALLBACK_DEADLINE_SECONDS = 60.0
 
 
 class AiProviderError(Exception):
@@ -149,6 +157,7 @@ class AiService:
             )
         if self.is_stub:
             return self._stub_reply(history, sources)
+        started = time.monotonic()
         try:
             if self.provider == "gemini":
                 return self._convert_errors(self._gemini, history, system,
@@ -159,6 +168,12 @@ class AiService:
             if not self._fallback_available:
                 raise
             for fb_model in self._fallback_models():
+                if time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS:
+                    logger.warning(
+                        "AI fallback chain cut short by %.0fs deadline "
+                        "after primary %s failed", _FALLBACK_DEADLINE_SECONDS,
+                        self.provider)
+                    break
                 logger.info(
                     "AI fallback engaged: primary %s failed, trying "
                     "OpenAI-compatible fallback model %s",
@@ -217,6 +232,7 @@ class AiService:
         else:
             primary = self._openai_stream(history, system,
                                           max_tokens=max_tokens)
+        started = time.monotonic()
         emitted = False
         primary_error = None
         try:
@@ -234,6 +250,11 @@ class AiService:
             self.provider, self._fallback_models())
         fb_emitted = False
         for fb_model in self._fallback_models():
+            if time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS:
+                logger.warning(
+                    "AI stream fallback chain cut short by %.0fs deadline",
+                    _FALLBACK_DEADLINE_SECONDS)
+                break
             try:
                 for delta in self._openai_stream(
                         history, system, max_tokens=max_tokens,
@@ -312,21 +333,21 @@ class AiService:
             raise AiProviderError(FRIENDLY_ERROR) from None
 
     def _post_with_retry(self, url: str, **kwargs):
-        """POST with a short retry on transient provider errors.
+        """POST with ONE short retry on transient provider errors.
 
-        Gemini's free tier intermittently answers 429/503 in bursts; one or
-        two retries a second apart usually get through, which keeps the
-        callers' fallbacks (question bank, template report) for real outages.
+        Gemini's free tier intermittently answers 429/503 in bursts; one
+        retry half a second later usually gets through. Deliberately only
+        one retry: the failover chain (Gemma → openrouter/free) already
+        provides redundancy, and more retries here just stretch the time
+        a learner waits before either an answer or an honest error.
         """
-        import time
-
         last_resp = None
-        for attempt in range(3):
+        for attempt in range(2):
             last_resp = requests.post(url, **kwargs)
             if last_resp.status_code not in (429, 503):
                 return last_resp
-            if attempt < 2:
-                time.sleep(1.0 if attempt == 0 else 2.5)
+            if attempt == 0:
+                time.sleep(0.7)
         return last_resp
 
     def _open_stream(self, url: str, **kwargs):
@@ -337,8 +358,6 @@ class AiService:
         không dùng chính sách retry dài của :meth:`_post_with_retry` — lỗi
         dai dẳng được failover xử lý ở tầng trên.
         """
-        import time
-
         kwargs["stream"] = True
         resp = requests.post(url, **kwargs)
         if resp.status_code in (429, 503):

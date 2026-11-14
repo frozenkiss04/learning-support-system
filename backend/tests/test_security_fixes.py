@@ -448,4 +448,8 @@ def test_retrieve_ignores_chunks_from_other_embedder(sample_course):
     assert rag_service.retrieve("Good morning là câu chào vào buổi sáng")
     db.session.query(KnowledgeChunk).update({"embedding_mode": "gemini"})
     db.session.commit()
+    # Đổi trực tiếp dưới DB (bỏ qua build_index) nên phải xóa cache truy
+    # vấn thủ công — ngoài đời index chỉ đổi qua build_index, hàm đó đã
+    # tự xóa cache.
+    rag_service.clear_caches()
     assert rag_service.retrieve("Good morning là câu chào vào buổi sáng") == []

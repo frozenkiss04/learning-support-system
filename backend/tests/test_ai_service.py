@@ -83,9 +83,9 @@ def test_gemini_503_falls_back_to_openai_compatible(monkeypatch, calls):
     assert url == f"{GROQ_BASE}/chat/completions"
     # AI_FALLBACK_MODEL không đặt -> mặc định llama-3.3-70b-versatile.
     assert payload["model"] == "llama-3.3-70b-versatile"
-    # Gemini đã được thử đúng 3 lần (retry nội bộ) trước khi failover.
+    # Gemini đã được thử đúng 2 lần (1 lần + 1 retry ngắn) trước khi failover.
     gemini_calls = [c for c in calls if "generativelanguage" in c[0]]
-    assert len(gemini_calls) == 3
+    assert len(gemini_calls) == 2
 
 
 def test_fallback_disabled_raises_like_before(monkeypatch, calls):

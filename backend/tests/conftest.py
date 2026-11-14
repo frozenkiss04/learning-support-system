@@ -35,6 +35,7 @@ from app.extensions import db  # noqa: E402
 from app.models.course import Course, Unit  # noqa: E402
 from app.models.learning import Exercise, Lesson  # noqa: E402
 from app.models.user import ROLE_ADMIN, ROLE_LEARNER, User  # noqa: E402
+from app.services import rag_service  # noqa: E402
 
 LEARNER_EMAIL = "learner@example.com"
 LEARNER_PASSWORD = "Learner@123"
@@ -65,6 +66,9 @@ def app(tmp_path):
     ctx = flask_app.app_context()
     ctx.push()
     db.create_all()
+    # Cache embedding/truy vấn của RAG sống ở cấp module (ngoài DB) nên phải
+    # xóa mỗi test để kết quả truy vấn không rò từ test này sang test khác.
+    rag_service.clear_caches()
     yield flask_app
     db.session.remove()
     db.drop_all()

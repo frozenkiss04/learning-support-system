@@ -27,10 +27,10 @@ from ..models.learning import Attempt, Exercise, Lesson, UserProgress
 from ..models.practice import AiPracticeSet
 from ..models.review import ReviewCard
 from ..models.user import ROLE_ADMIN, ROLE_LEARNER, ROLE_TEACHER, User
-from ..services import rag_service
 from ..services.ai_service import SYSTEM_ADMIN, SYSTEM_TUTOR, AiProviderError, AiService
 from ..services.canned_responses import match_canned_response
 from ..services.progress_service import _normalize_answer, award_xp
+from ..services.tutor_agent import TutorAgent
 from ..utils.responses import fail, ok
 from ..utils.security import current_user
 
@@ -193,38 +193,6 @@ def _admin_stats_context() -> str:
                 "Hãy nói rõ điều này, không tự đưa ra con số nào.")
 
 
-def _rag_context(session, history) -> tuple[str, list[str]]:
-    """RAG cho nhánh TUTOR: (khối bổ sung vào system prompt, tiêu đề nguồn).
-
-    Truy vấn bằng câu hỏi mới nhất của học viên; có lesson context thì giới
-    hạn trong khóa của bài đó. Mọi lỗi retrieval đều bị nuốt im lặng (trả
-    rỗng) — RAG là lớp tăng cường, không bao giờ được làm hỏng luồng chat.
-    Nhánh ADMIN không đi qua đây (đã có snapshot số liệu riêng).
-    """
-    if session.context_type != "LESSON":
-        return "", []
-    question = next((m["content"] for m in reversed(history)
-                     if m["role"] == "user"), "")
-    if not question:
-        return "", []
-    course_id = None
-    if session.context_id:
-        lesson = db.session.get(Lesson, session.context_id)
-        if lesson is not None and lesson.unit is not None:
-            course_id = lesson.unit.course_id
-    try:
-        hits = rag_service.retrieve(question, top_k=4, course_id=course_id)
-    except Exception:
-        logger.exception("RAG retrieve thất bại — bỏ qua ngữ cảnh tài liệu")
-        return "", []
-    if not hits:
-        return "", []
-    block = "\n\n".join(f"[{h['title']}]\n{h['content']}" for h in hits)
-    system_extra = ("TÀI LIỆU KHÓA HỌC LIÊN QUAN (ưu tiên dựa vào đây, "
-                    f"trích nguồn khi dùng):\n{block}")
-    return system_extra, [h["title"] for h in hits]
-
-
 def _build_system_prompt(user, session) -> str:
     if session.context_type == "ROLEPLAY":
         info = ROLEPLAY_SCENARIOS.get(getattr(session, "_roleplay_scenario", None) or "")
@@ -364,14 +332,11 @@ def chat():
             "source": "canned",
         })
     history = _history(session)
-    rag_extra, rag_titles = _rag_context(session, history)
-    if rag_extra:
-        system = system + "\n\n" + rag_extra
     service = AiService()
     max_tokens = 400 if session.context_type == "ROLEPLAY" else None
     try:
-        reply = service.chat(history, system, sources=rag_titles,
-                             max_tokens=max_tokens)
+        reply, _sources, trace = TutorAgent(service).answer(
+            session, history, system, max_tokens=max_tokens)
     except AiProviderError as exc:
         # Tin nhắn user đã lưu; không lưu "trả lời" giả khi provider lỗi.
         return fail(str(exc), 502, code="AI_PROVIDER_ERROR")
@@ -383,6 +348,7 @@ def chat():
         "provider": service.provider,
         "stub": service.is_stub,
         "source": "ai",
+        "trace": trace,
     })
 
 
@@ -436,9 +402,13 @@ def chat_stream():
         yield f"data: {json.dumps({'type': 'meta', 'session_id': session_id, 'provider': service.provider, 'stub': service.is_stub, 'source': 'ai'})}\n\n"
         # RAG chạy bên trong generator (sau khi meta đã gửi) để giao diện
         # hiện trạng thái trả lời ngay, không phải chờ embedding xong mới
-        # nhận được byte đầu tiên.
-        rag_extra, rag_titles = _rag_context(session, history)
-        full_system = system + ("\n\n" + rag_extra if rag_extra else "")
+        # nhận được byte đầu tiên. Agent quyết định có cần truy vấn không
+        # (chào hỏi/cảm ơn thì bỏ qua) rồi truy vấn vector DB.
+        ctx = TutorAgent(service).prepare(session, history, system)
+        full_system = ctx.system
+        rag_titles = ctx.sources
+        trace = " ".join(f"{s['step']}={s['ms']}ms({s['detail']})"
+                         for s in ctx.trace)
         if rag_titles:
             yield f"data: {json.dumps({'type': 'sources', 'sources': rag_titles}, ensure_ascii=False)}\n\n"
         parts = []
@@ -459,11 +429,11 @@ def chat_stream():
         if content:
             _save_assistant(session, content)
         logger.info(
-            "ai stream done: ctx=%s ttft=%s total=%.2fs chars=%d",
+            "ai stream done: ctx=%s ttft=%s total=%.2fs chars=%d trace=[%s]",
             session.context_type,
             (f"{first_delta_at - started:.2f}s"
              if first_delta_at is not None else "n/a"),
-            time.monotonic() - started, len(content))
+            time.monotonic() - started, len(content), trace)
         yield "data: [DONE]\n\n"
 
     return Response(generate(), mimetype="text/event-stream",
