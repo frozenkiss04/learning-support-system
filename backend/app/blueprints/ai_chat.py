@@ -113,6 +113,11 @@ def _clean_scenario(value):
 ADMIN_ROLES = (ROLE_ADMIN, ROLE_TEACHER)
 MAX_MESSAGE_CHARS = 4000
 HISTORY_LIMIT = 20  # chỉ gửi 20 lượt gần nhất cho AI để khống chế token/chi phí
+# Ngân sách ký tự cho lịch sử: 20 lượt mà mỗi lượt dài (tin nhắn tới 4000 ký
+# tự, trả lời AI tới ~4000 ký tự) thì context phình tới hàng chục nghìn ký tự,
+# làm AI chậm và dễ timeout. 6000 ký tự (~1500 token) giữ được ~10-12 lượt
+# gần nhất trong phiên hội thoại bình thường.
+MAX_HISTORY_CHARS = 6000
 
 
 def _daily_limit():
@@ -123,8 +128,19 @@ def _daily_limit():
 # Helpers
 # --------------------------------------------------------------------------
 def _history(session, limit=HISTORY_LIMIT):
+    """Lịch sử gửi cho AI: tối đa ``limit`` lượt gần nhất, trong ngân sách
+    ``MAX_HISTORY_CHARS`` ký tự. Luôn giữ lượt cuối cùng (câu hỏi hiện tại)
+    kể cả khi riêng nó đã vượt ngân sách."""
     messages = session.messages[-limit:] if session.messages else []
-    return [{"role": m.role, "content": m.content} for m in messages]
+    picked, total = [], 0
+    for m in reversed(messages):
+        content = m.content or ""
+        if picked and total + len(content) > MAX_HISTORY_CHARS:
+            break
+        picked.append(m)
+        total += len(content)
+    picked.reverse()
+    return [{"role": m.role, "content": m.content} for m in picked]
 
 
 def _lesson_context(session) -> str:
@@ -335,7 +351,7 @@ def chat():
     service = AiService()
     max_tokens = 400 if session.context_type == "ROLEPLAY" else None
     try:
-        reply, _sources, trace = TutorAgent(service).answer(
+        reply, _sources, trace, source = TutorAgent(service).answer(
             session, history, system, max_tokens=max_tokens)
     except AiProviderError as exc:
         # Tin nhắn user đã lưu; không lưu "trả lời" giả khi provider lỗi.
@@ -347,7 +363,7 @@ def chat():
         "reply": reply,
         "provider": service.provider,
         "stub": service.is_stub,
-        "source": "ai",
+        "source": source,
         "trace": trace,
     })
 
@@ -422,18 +438,29 @@ def chat_stream():
                 parts.append(chunk)
                 yield f"data: {json.dumps({'type': 'delta', 'delta': chunk}, ensure_ascii=False)}\n\n"
         except AiProviderError as exc:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
+            # AI lỗi mà chưa phát ký tự nào và có tài liệu RAG: trả tài liệu
+            # thay vì báo lỗi (cùng cơ chế fallback như /chat). Đã phát một
+            # phần rồi thì không chèn thêm — giữ nguyên phần đã phát.
+            fallback = TutorAgent.fallback_text(ctx) if not parts else None
+            if fallback is None:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            logger.info("ai stream degraded to RAG-only reply (%d hits)",
+                        len(ctx.hits))
+            first_delta_at = time.monotonic()
+            parts.append(fallback)
+            yield f"data: {json.dumps({'type': 'delta', 'delta': fallback}, ensure_ascii=False)}\n\n"
         content = "".join(parts).strip()
         if content:
             _save_assistant(session, content)
         logger.info(
-            "ai stream done: ctx=%s ttft=%s total=%.2fs chars=%d trace=[%s]",
+            "ai stream done: ctx=%s ttft=%s total=%.2fs chars=%d "
+            "prompt=%d chars trace=[%s]",
             session.context_type,
             (f"{first_delta_at - started:.2f}s"
              if first_delta_at is not None else "n/a"),
-            time.monotonic() - started, len(content), trace)
+            time.monotonic() - started, len(content), len(full_system), trace)
         yield "data: [DONE]\n\n"
 
     return Response(generate(), mimetype="text/event-stream",

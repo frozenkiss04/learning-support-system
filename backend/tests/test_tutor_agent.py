@@ -102,3 +102,61 @@ def test_small_talk_chat_trace_has_no_retrieve(
     assert resp.status_code == 200
     data = resp.get_json()["data"]
     assert [s["step"] for s in data["trace"]] == ["route", "answer"]
+
+
+def test_rag_block_truncates_long_chunks(sample_course):
+    from app.extensions import db
+    from app.models.rag import KnowledgeChunk
+    from app.services.tutor_agent import MAX_CHUNK_CHARS
+
+    rag_service.build_index()
+    db.session.query(KnowledgeChunk).update({"content": "x" * 2000})
+    db.session.commit()
+    rag_service.clear_caches()
+    session = SimpleNamespace(context_type="LESSON",
+                              context_id=sample_course["lesson_id"])
+    ctx = TutorAgent().prepare(
+        session, [{"role": "user", "content": "Good morning nghĩa là gì?"}],
+        "BASE")
+    assert ctx.hits
+    assert "x" * (MAX_CHUNK_CHARS + 1) not in ctx.system
+
+
+def test_answer_falls_back_to_rag_when_provider_fails(
+        sample_course, monkeypatch):
+    from app.services.ai_service import AiProviderError
+
+    rag_service.build_index()
+    session = SimpleNamespace(context_type="LESSON",
+                              context_id=sample_course["lesson_id"])
+    agent = TutorAgent()
+
+    def boom(*args, **kwargs):
+        raise AiProviderError("lỗi giả")
+
+    monkeypatch.setattr(agent.service, "chat", boom)
+    reply, sources, trace, source = agent.answer(
+        session, [{"role": "user", "content": "Good morning nghĩa là gì?"}],
+        "BASE")
+    assert source == "rag_fallback"
+    assert "đang bận" in reply
+    assert sources and sources[0] in reply
+    assert trace[-1]["step"] == "fallback"
+
+
+def test_answer_reraises_without_rag_hits(sample_course, monkeypatch):
+    from app.services.ai_service import AiProviderError
+
+    # Không build index -> retrieve rỗng -> không có fallback.
+    session = SimpleNamespace(context_type="LESSON",
+                              context_id=sample_course["lesson_id"])
+    agent = TutorAgent()
+
+    def boom(*args, **kwargs):
+        raise AiProviderError("lỗi giả")
+
+    monkeypatch.setattr(agent.service, "chat", boom)
+    with pytest.raises(AiProviderError):
+        agent.answer(
+            session, [{"role": "user", "content": "Good morning nghĩa là gì?"}],
+            "BASE")

@@ -4,6 +4,43 @@ conftest strips GEMINI_API_KEY / OPENAI_API_KEY before the app is imported,
 so AiService replies with its plainly-labelled stub text and no network
 call is ever made.
 """
+from app.blueprints.ai_chat import MAX_HISTORY_CHARS, _history
+from app.extensions import db
+from app.models.chat import ChatMessage, ChatSession
+
+
+def _make_session_with_messages(learner, contents):
+    session = ChatSession(user_id=learner.id, context_type="LESSON",
+                          context_id=None, title="t")
+    db.session.add(session)
+    db.session.flush()
+    for i, content in enumerate(contents):
+        db.session.add(ChatMessage(
+            session_id=session.id,
+            role="user" if i % 2 == 0 else "assistant",
+            content=content))
+    db.session.commit()
+    return session
+
+
+def test_history_trims_to_char_budget(app, learner):
+    session = _make_session_with_messages(learner, ["x" * 1000] * 30)
+    history = _history(session)
+    assert len(history) == MAX_HISTORY_CHARS // 1000  # 6 lượt gần nhất
+    assert sum(len(m["content"]) for m in history) <= MAX_HISTORY_CHARS
+
+
+def test_history_keeps_short_session_whole(app, learner):
+    session = _make_session_with_messages(learner, ["hello"] * 4)
+    assert len(_history(session)) == 4
+
+
+def test_history_always_keeps_last_message(app, learner):
+    session = _make_session_with_messages(
+        learner, ["x" * 100] * 5 + ["y" * 8000])
+    history = _history(session)
+    assert len(history) == 1
+    assert history[0]["content"] == "y" * 8000
 
 
 def _chat(client, headers, **payload):

@@ -24,3 +24,16 @@ def test_health_needs_no_auth(client):
 def test_unknown_route_is_404(client):
     resp = client.get("/api/this-route-does-not-exist")
     assert resp.status_code == 404
+
+
+def test_health_includes_commit_when_env_set(client, monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT",
+                       "d03711b31a37a45e425e274d78b87310c9c9dc1e")
+    resp = client.get("/health")
+    assert resp.get_json()["data"]["commit"] == "d03711b"
+
+
+def test_health_omits_commit_without_env(client, monkeypatch):
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    resp = client.get("/health")
+    assert "commit" not in resp.get_json()["data"]

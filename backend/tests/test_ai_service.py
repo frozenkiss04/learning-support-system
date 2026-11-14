@@ -83,9 +83,10 @@ def test_gemini_503_falls_back_to_openai_compatible(monkeypatch, calls):
     assert url == f"{GROQ_BASE}/chat/completions"
     # AI_FALLBACK_MODEL không đặt -> mặc định llama-3.3-70b-versatile.
     assert payload["model"] == "llama-3.3-70b-versatile"
-    # Gemini đã được thử đúng 2 lần (1 lần + 1 retry ngắn) trước khi failover.
+    # Gemini xoay đủ 3 model (chính + 2 dự phòng), mỗi model 2 lần
+    # (1 lần + 1 retry), rồi mới failover sang Groq.
     gemini_calls = [c for c in calls if "generativelanguage" in c[0]]
-    assert len(gemini_calls) == 2
+    assert len(gemini_calls) == 6
 
 
 def test_fallback_disabled_raises_like_before(monkeypatch, calls):
@@ -219,8 +220,9 @@ def test_stream_fails_over_before_first_delta(monkeypatch, calls):
     service = _service(monkeypatch, fallback="true")
     out = "".join(service.stream(MESSAGES))
     assert out == "trả lời dự phòng"
-    # 1 lần gọi đầu + 1 lần thử lại ngắn của _open_stream, rồi failover.
-    assert counts["gemini"] == 2
+    # 3 model Gemini xoay, mỗi model 1 lần gọi đầu + 1 lần thử lại ngắn
+    # của _open_stream, rồi mới failover.
+    assert counts["gemini"] == 6
     assert counts["openai"] == 1
 
 
@@ -385,3 +387,72 @@ def test_chat_fallback_chain_reaches_roulette_last(monkeypatch, calls):
     assert service.chat(MESSAGES) == "roulette cứu cánh"
     assert tried == ["dead/model:free", "google/gemma-4-31b-it:free",
                      "openrouter/free"]
+
+
+# ---------------------------------------------------------------------------
+# Xoay model Gemini + không xoay khi bị chặn + gộp role trùng
+# ---------------------------------------------------------------------------
+
+def test_gemini_rotates_to_next_model_on_503(monkeypatch, calls):
+    """Model chính 503 -> xoay sang gemini-2.5-flash, KHÔNG cần bật fallback."""
+    tried = []
+
+    def handler(url, kwargs):
+        if "generativelanguage" not in url:
+            raise AssertionError("không được chạm đường OpenAI khi xoay nội bộ")
+        model = url.split("/models/")[1].split(":")[0]
+        tried.append(model)
+        if model == "gemini-3.8-flash":
+            return FakeResp(503)
+        return _gemini_ok("trả lời từ model xoay")
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback=None)  # fallback TẮT
+    assert service.chat(MESSAGES) == "trả lời từ model xoay"
+    assert tried.count("gemini-3.8-flash") == 2  # 1 lần + 1 retry
+    assert tried.count("gemini-2.5-flash") == 1
+    assert "gemini-2.0-flash" not in tried  # dừng ngay khi có model trả lời
+
+
+def test_blocked_prompt_does_not_rotate(monkeypatch, calls):
+    def handler(url, kwargs):
+        calls.append(url)
+        return FakeResp(200, {"candidates": []})  # bị chặn an toàn
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback="true")
+    with pytest.raises(AiProviderError) as excinfo:
+        service.chat(MESSAGES)
+    assert "không được nhà cung cấp AI xử lý" in str(excinfo.value)
+    assert len(calls) == 1  # không xoay model, không failover
+
+
+def test_normalize_merges_consecutive_user_turns():
+    history = AiService._normalize([
+        {"role": "user", "content": "câu một"},
+        {"role": "user", "content": "câu hai"},
+        {"role": "assistant", "content": "trả lời"},
+        {"role": "user", "content": "câu ba"},
+    ])
+    assert history == [
+        {"role": "user", "content": "câu một\n\ncâu hai"},
+        {"role": "assistant", "content": "trả lời"},
+        {"role": "user", "content": "câu ba"},
+    ]
+
+
+def test_stream_rotates_to_next_gemini_model(monkeypatch, calls):
+    tried = []
+
+    def handler(url, kwargs):
+        model = url.split("/models/")[1].split(":")[0]
+        tried.append(model)
+        if model == "gemini-3.8-flash":
+            return FakeStreamResp((), status_code=503)
+        return FakeStreamResp(_gemini_sse("xoay stream ok"))
+
+    _install_post(monkeypatch, handler)
+    service = _service(monkeypatch, fallback=None)
+    assert "".join(service.stream(MESSAGES)) == "xoay stream ok"
+    assert tried.count("gemini-3.8-flash") == 2  # 1 lần + 1 retry của _open_stream
+    assert tried.count("gemini-2.5-flash") == 1

@@ -13,7 +13,10 @@ can be diagnosed from the logs instead of guessed at:
    results, JSON cosine fallback on SQLite. Any retrieval failure is
    swallowed (the tutor still answers, just without document context).
 3. ANSWER: :class:`AiService` generation with the retrieved chunks woven
-   into the system prompt, plus their titles as sources.
+   into the system prompt, plus their titles as sources. If every model
+   fails but retrieval found course material, the turn degrades to a
+   RAG-only reply (the retrieved chunks, honestly labelled) instead of
+   an error — the learner still gets something useful.
 
 The blueprint keeps session/message/rate-limit logic; the agent owns
 routing, retrieval and prompt assembly so ``/chat`` and ``/chat/stream``
@@ -32,7 +35,7 @@ from dataclasses import dataclass, field
 from ..extensions import db
 from ..models.learning import Lesson
 from . import rag_service
-from .ai_service import AiService
+from .ai_service import AiProviderError, AiService
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,15 @@ _SMALL_TALK_PREFIXES = (
     "cam on", "thank you", "thanks", "tam biet", "bye",
 )
 _SMALL_TALK_MAX_LEN = 30
+
+# RAG chunk dài nhất hiện tại ~340 ký tự; cắt ở 800 để một chunk dài bất
+# thường (vd mô tả bài học dài) không phình system prompt.
+MAX_CHUNK_CHARS = 800
+
+FALLBACK_INTRO = (
+    "Xin lỗi, trợ lý AI đang bận nên chưa trả lời trực tiếp được. Trong lúc "
+    "chờ, bạn có thể xem tài liệu trong khóa học liên quan nhất tới câu hỏi:"
+)
 
 
 def _fold(text: str) -> str:
@@ -80,6 +92,7 @@ class TurnContext:
     system: str
     sources: list[str] = field(default_factory=list)
     trace: list[dict] = field(default_factory=list)
+    hits: list[dict] = field(default_factory=list)
 
 
 class TutorAgent:
@@ -121,6 +134,7 @@ class TutorAgent:
                       "detail": route})
         system = base_system
         sources: list[str] = []
+        hits: list[dict] = []
         if route == "retrieve":
             t1 = time.monotonic()
             backend = rag_service.search_backend()
@@ -138,7 +152,8 @@ class TutorAgent:
             })
             if hits:
                 block = "\n\n".join(
-                    f"[{h['title']}]\n{h['content']}" for h in hits)
+                    f"[{h['title']}]\n{h['content'][:MAX_CHUNK_CHARS]}"
+                    for h in hits)
                 system += ("\n\nTÀI LIỆU KHÓA HỌC LIÊN QUAN (ưu tiên dựa vào "
                            f"đây, trích nguồn khi dùng):\n{block}")
                 sources = [h["title"] for h in hits]
@@ -146,22 +161,52 @@ class TutorAgent:
                     session.context_type, route,
                     " ".join(f"{s['step']}={s['ms']}ms({s['detail']})"
                              for s in trace))
-        return TurnContext(system=system, sources=sources, trace=trace)
+        return TurnContext(system=system, sources=sources, trace=trace,
+                           hits=hits)
+
+    @staticmethod
+    def fallback_text(ctx: TurnContext) -> str | None:
+        """Câu trả lời dự phòng khi AI lỗi mà có tài liệu RAG — None nếu
+        không có tài liệu (lúc đó tầng trên vẫn báo lỗi như cũ). Chỉ dùng
+        đúng nội dung đã truy vấn được, không bịa thêm."""
+        if not ctx.hits:
+            return None
+        block = "\n\n".join(
+            f"[{h['title']}]\n{h['content'][:MAX_CHUNK_CHARS]}"
+            for h in ctx.hits)
+        return f"{FALLBACK_INTRO}\n\n{block}"
 
     def answer(self, session, history, base_system: str,
                max_tokens: int | None = None):
         """Full turn (non-streaming): prepare + generate.
 
-        Returns ``(reply, sources, trace)``. Provider failures raise
+        Returns ``(reply, sources, trace, source)`` where ``source`` is
+        ``"ai"`` normally or ``"rag_fallback"`` when every model failed
+        but retrieval found course material (see :meth:`fallback_text`).
+        Provider failures with no RAG hits still raise
         :class:`AiProviderError` like :meth:`AiService.chat`.
         """
         ctx = self.prepare(session, history, base_system)
         t0 = time.monotonic()
-        reply = self.service.chat(history, ctx.system, sources=ctx.sources,
-                                  max_tokens=max_tokens)
+        try:
+            reply = self.service.chat(history, ctx.system, sources=ctx.sources,
+                                      max_tokens=max_tokens)
+        except AiProviderError:
+            fallback = self.fallback_text(ctx)
+            if fallback is None:
+                raise
+            logger.info("tutor agent degraded to RAG-only reply "
+                        "(%d hits)", len(ctx.hits))
+            ctx.trace.append({
+                "step": "fallback",
+                "ms": round((time.monotonic() - t0) * 1000, 1),
+                "detail": f"rag_fallback, {len(ctx.hits)} hits",
+            })
+            return fallback, ctx.sources, ctx.trace, "rag_fallback"
         ctx.trace.append({
             "step": "answer",
             "ms": round((time.monotonic() - t0) * 1000, 1),
-            "detail": f"{len(reply)} chars via {self.service.provider}",
+            "detail": (f"{len(reply)} chars via {self.service.provider} "
+                       f"(prompt {len(ctx.system)} chars)"),
         })
-        return reply, ctx.sources, ctx.trace
+        return reply, ctx.sources, ctx.trace, "ai"

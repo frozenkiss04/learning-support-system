@@ -14,6 +14,15 @@ lỗi sau retry nội bộ, tự chuyển sang đường OpenAI-compatible
 (``OPENAI_API_KEY`` + ``OPENAI_BASE_URL``, vd Groq) với ``AI_FALLBACK_MODEL``
 (mặc định ``llama-3.3-70b-versatile``).
 
+Xoay model Gemini (luôn bật, không cần opt-in): khi model chính lỗi do
+hết quota/tải (429/503/timeout), tự thử các model Gemini khác theo thứ tự
+(``AI_MODEL`` rồi ``AI_GEMINI_FALLBACK_MODELS``, mặc định
+``gemini-2.5-flash,gemini-2.0-flash``) — quota free của Gemini tính theo
+từng model nên xoay model thường qua được lỗi 429 ngay. Chỉ xoay khi lỗi
+có thể thử lại được: nội dung bị chặn an toàn (``FRIENDLY_BLOCKED``) thì
+báo lỗi ngay thay vì đốt cả chuỗi model. Toàn bộ chuỗi xoay + failover
+chạy trong ngân sách 60 giây, hết giờ thì dừng và báo lỗi gốc.
+
 API keys are read from env only — never hardcode them here.
 Provider failures (timeout, HTTP error, malformed payload) raise
 ``AiProviderError`` with a user-friendly Vietnamese message; the blueprint
@@ -68,7 +77,15 @@ _FALLBACK_DEADLINE_SECONDS = 60.0
 
 
 class AiProviderError(Exception):
-    """Provider failure whose message is safe/friendly to show to end users."""
+    """Provider failure whose message is safe/friendly to show to end users.
+
+    ``retryable=False`` (nội dung bị chặn an toàn) thì xoay model hay
+    failover cũng vô ích — tầng trên báo lỗi ngay thay vì thử tiếp.
+    """
+
+    def __init__(self, message, retryable=True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class AiService:
@@ -101,6 +118,16 @@ class AiService:
             "AI_FALLBACK_ENABLED", "").strip().lower() in ("true", "1", "yes")
         self.fallback_model = (os.getenv("AI_FALLBACK_MODEL", "").strip()
                                or "llama-3.3-70b-versatile")
+        # Xoay model Gemini: model chính trước, rồi các model dự phòng
+        # (quota free tính theo từng model). Đọc env mỗi lần tạo service
+        # (1 instance/request) nên đổi env không cần restart.
+        self.gemini_models = []
+        for m in [self.model] + os.getenv(
+                "AI_GEMINI_FALLBACK_MODELS",
+                "gemini-2.5-flash,gemini-2.0-flash").split(","):
+            m = (m or "").strip()
+            if m and m not in self.gemini_models:
+                self.gemini_models.append(m)
 
     # -- state -------------------------------------------------------------
     @property
@@ -158,35 +185,62 @@ class AiService:
         if self.is_stub:
             return self._stub_reply(history, sources)
         started = time.monotonic()
-        try:
-            if self.provider == "gemini":
-                return self._convert_errors(self._gemini, history, system,
-                                            max_tokens=max_tokens)
-            return self._convert_errors(self._openai, history, system,
-                                        max_tokens=max_tokens)
-        except AiProviderError as primary_error:
-            if not self._fallback_available:
-                raise
-            for fb_model in self._fallback_models():
-                if time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS:
-                    logger.warning(
-                        "AI fallback chain cut short by %.0fs deadline "
-                        "after primary %s failed", _FALLBACK_DEADLINE_SECONDS,
-                        self.provider)
-                    break
-                logger.info(
-                    "AI fallback engaged: primary %s failed, trying "
-                    "OpenAI-compatible fallback model %s",
-                    self.provider, fb_model)
-                try:
-                    return self._convert_errors(
-                        self._openai, history, system, model=fb_model,
-                        max_tokens=max_tokens)
-                except AiProviderError:
-                    logger.warning(
-                        "AI fallback (model %s) failed — trying next "
-                        "in chain if any", fb_model)
-            raise primary_error from None
+        last_error = None
+        for label, call in self._chat_attempts(history, system, max_tokens):
+            if (last_error is not None
+                    and time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS):
+                logger.warning(
+                    "AI attempt chain cut short by %.0fs deadline",
+                    _FALLBACK_DEADLINE_SECONDS)
+                break
+            try:
+                return call()
+            except AiProviderError as exc:
+                last_error = exc
+                if not exc.retryable:
+                    raise
+                logger.warning("AI attempt %s failed — trying next in "
+                               "chain if any", label)
+        raise last_error from None
+
+    def _chat_attempts(self, history, system, max_tokens):
+        """Chuỗi lần thử cho chat(): xoay model Gemini rồi tới failover
+        OpenAI-compatible (nếu bật). Mỗi lần thử đã gồm retry nội bộ."""
+        if self.provider == "gemini":
+            for model in self.gemini_models:
+                yield (f"gemini:{model}",
+                       lambda m=model: self._convert_errors(
+                           self._gemini, history, system, model=m,
+                           max_tokens=max_tokens))
+            if self._fallback_available:
+                for fb_model in self._fallback_models():
+                    yield (f"openai:{fb_model}",
+                           lambda m=fb_model: self._convert_errors(
+                               self._openai, history, system, model=m,
+                               max_tokens=max_tokens))
+        else:
+            yield (f"openai:{self.model}",
+                   lambda: self._convert_errors(
+                       self._openai, history, system,
+                       max_tokens=max_tokens))
+
+    def _stream_attempts(self, history, system, max_tokens):
+        """Chuỗi lần thử cho stream() — cùng thứ tự như _chat_attempts."""
+        if self.provider == "gemini":
+            for model in self.gemini_models:
+                yield (f"gemini:{model}",
+                       lambda m=model: self._gemini_stream(
+                           history, system, model=m, max_tokens=max_tokens))
+            if self._fallback_available:
+                for fb_model in self._fallback_models():
+                    yield (f"openai:{fb_model}",
+                           lambda m=fb_model: self._openai_stream(
+                               history, system, model=m,
+                               max_tokens=max_tokens))
+        else:
+            yield (f"openai:{self.model}",
+                   lambda: self._openai_stream(
+                       history, system, max_tokens=max_tokens))
 
     def _convert_errors(self, fn, *args, **kwargs):
         """Gọi một hàm provider, đổi mọi lỗi thành AiProviderError thân thiện."""
@@ -213,8 +267,8 @@ class AiService:
         ``streamGenerateContent`` / OpenAI ``stream=true``) nên ký tự đầu
         tiên tới người dùng gần như ngay khi mô hình bắt đầu sinh — thay
         cho cách cũ gọi non-streaming rồi cắt nhỏ lại (phải chờ toàn bộ
-        câu trả lời). Failover chỉ kích hoạt khi provider chính lỗi TRƯỚC
-        delta đầu tiên; đã phát một phần mà lỗi thì raise
+        câu trả lời). Xoay model/failover chỉ kích hoạt khi một model lỗi
+        TRƯỚC delta đầu tiên; đã phát một phần mà lỗi thì raise
         :class:`AiProviderError` giống :meth:`chat`.
         """
         history = self._normalize(messages)
@@ -226,63 +280,54 @@ class AiService:
         if self.is_stub:
             yield from re.findall(r"\S+\s*", self._stub_reply(history, sources))
             return
-        if self.provider == "gemini":
-            primary = self._gemini_stream(history, system,
-                                          max_tokens=max_tokens)
-        else:
-            primary = self._openai_stream(history, system,
-                                          max_tokens=max_tokens)
         started = time.monotonic()
-        emitted = False
-        primary_error = None
-        try:
-            for delta in primary:
-                emitted = True
-                yield delta
-            return
-        except AiProviderError as exc:
-            primary_error = exc
-            if emitted or not self._fallback_available:
-                raise
-        logger.info(
-            "AI stream fallback engaged: primary %s failed before first "
-            "delta, trying OpenAI-compatible fallback chain %s",
-            self.provider, self._fallback_models())
-        fb_emitted = False
-        for fb_model in self._fallback_models():
-            if time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS:
+        last_error = None
+        for label, make_stream in self._stream_attempts(
+                history, system, max_tokens):
+            if (last_error is not None
+                    and time.monotonic() - started > _FALLBACK_DEADLINE_SECONDS):
                 logger.warning(
-                    "AI stream fallback chain cut short by %.0fs deadline",
+                    "AI stream attempt chain cut short by %.0fs deadline",
                     _FALLBACK_DEADLINE_SECONDS)
                 break
+            emitted = False
             try:
-                for delta in self._openai_stream(
-                        history, system, max_tokens=max_tokens,
-                        model=fb_model):
-                    fb_emitted = True
+                for delta in make_stream():
+                    emitted = True
                     yield delta
                 return
-            except AiProviderError:
-                if fb_emitted:
-                    # Đã phát một phần từ model này — không nối model khác
-                    # vào giữa câu trả lời.
+            except AiProviderError as exc:
+                last_error = exc
+                if emitted or not exc.retryable:
+                    # Đã phát một phần thì không nối model khác vào giữa
+                    # câu trả lời; bị chặn an toàn thì xoay cũng vô ích.
                     raise
                 logger.warning(
-                    "AI stream fallback (model %s) failed before first "
-                    "delta — trying next in chain if any", fb_model)
-        raise primary_error from None
+                    "AI stream attempt %s failed before first delta — "
+                    "trying next in chain if any", label)
+        raise last_error from None
 
     # -- helpers ------------------------------------------------------------
     @staticmethod
     def _normalize(messages: list[dict]) -> list[dict]:
-        """Keep only user/assistant turns with non-empty string content."""
+        """Keep only user/assistant turns with non-empty string content.
+
+        Hai lượt cùng role liên tiếp được gộp thành một: Gemini yêu cầu
+        role xen kẽ user/model, và sau một lượt lỗi provider (tin nhắn user
+        đã lưu nhưng không có trả lời) lượt tiếp theo sẽ tạo ra 2 lượt user
+        liên tiếp — gửi nguyên như vậy là 400, rồi lần nào cũng lỗi tiếp.
+        """
         history = []
         for m in messages or []:
             role = (m.get("role") or "user").lower()
             if role not in ("user", "assistant"):
                 continue  # system prompt is passed separately, never from history
             content = str(m.get("content") or "").strip()
-            if content:
+            if not content:
+                continue
+            if history and history[-1]["role"] == role:
+                history[-1]["content"] += "\n\n" + content
+            else:
                 history.append({"role": role, "content": content})
         return history
 
@@ -460,7 +505,7 @@ class AiService:
                     logger.warning(
                         "Gemini stream empty, promptFeedback: %s",
                         state["feedback"])
-                    raise AiProviderError(FRIENDLY_BLOCKED)
+                    raise AiProviderError(FRIENDLY_BLOCKED, retryable=False)
                 logger.warning("Gemini stream completed with no text")
                 raise AiProviderError(FRIENDLY_ERROR)
         except AiProviderError:
@@ -518,11 +563,12 @@ class AiService:
                     pass
 
     def _gemini(self, history: list[dict], system: str,
+                model: str | None = None,
                 max_tokens: int | None = None) -> str:
         # Key goes in a header, never in the URL (URLs end up in logs/proxies).
         resp = self._post_with_retry(
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent",
+            f"{model or self.model}:generateContent",
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": [
@@ -542,13 +588,14 @@ class AiService:
         candidates = data.get("candidates") or []
         if not candidates:
             # Usually a safety block — promptFeedback explains it, we don't.
+            # Xoay model không cứu được nội dung bị chặn nên không retryable.
             logger.warning("Gemini returned no candidates: %s",
                            data.get("promptFeedback"))
-            raise AiProviderError(FRIENDLY_BLOCKED)
+            raise AiProviderError(FRIENDLY_BLOCKED, retryable=False)
         parts = (candidates[0].get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts).strip()
         if not text:
-            raise AiProviderError(FRIENDLY_BLOCKED)
+            raise AiProviderError(FRIENDLY_BLOCKED, retryable=False)
         return text
 
     def _openai(self, history: list[dict], system: str,
