@@ -6,7 +6,10 @@ single exercise with its answer/explanation). The embedding is stored twice:
 - ``embedding`` — JSON-encoded list of floats in a Text column. Works on
   every backend (SQLite dev/tests included) and is the fallback search path.
 - ``embedding_vec`` — native ``vector`` column (pgvector) on Postgres/Neon,
-  indexed with HNSW for fast ANN search. On SQLite the same attribute maps
+  searched with one exact SQL query (``ORDER BY embedding_vec <=> :q``).
+  Deliberately unindexed: pgvector's HNSW/IVFFlat indexes cap at 2000
+  dimensions and these vectors are 3072-dim — with tens of chunks an
+  exact scan is sub-millisecond anyway. On SQLite the same attribute maps
   to a plain Text column (never populated) so ``create_all()`` keeps working
   in dev/tests without pgvector.
 

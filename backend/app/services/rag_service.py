@@ -10,9 +10,11 @@ Storage (two layers, same rows):
 - ``embedding`` (JSON text) — works on every backend, incl. SQLite
   (dev/tests); the fallback search path.
 - ``embedding_vec`` (pgvector ``vector(3072)``, Postgres/Neon only) —
-  indexed with HNSW, so retrieval is one indexed SQL query instead of
-  loading every chunk and running a Python cosine loop. Only Gemini
-  embeddings go here; the local embedder (256 dims) keeps the JSON path.
+  searched with one exact SQL query (no index: HNSW/IVFFlat cap at 2000
+  dims, these vectors are 3072-dim; exact scan is sub-millisecond at
+  this corpus size) instead of loading every chunk and running a
+  Python cosine loop. Only Gemini embeddings go here; the local
+  embedder (256 dims) keeps the JSON path.
 
 Embedder modes (``embedding_mode()``):
 
@@ -397,7 +399,7 @@ def build_if_needed() -> dict:
 # Retrieval
 # ---------------------------------------------------------------------------
 def _retrieve_pgvector(query_vec, top_k, course_id, threshold):
-    """Một query SQL qua HNSW index — không load toàn bộ chunk về Python."""
+    """Một query SQL exact scan qua cột vector — không load toàn bộ chunk về Python."""
     distance = KnowledgeChunk.embedding_vec.cosine_distance(query_vec)
     q = (db.session.query(KnowledgeChunk, distance.label("distance"))
          .filter(KnowledgeChunk.embedding_vec.isnot(None))
@@ -462,7 +464,7 @@ def retrieve(query: str, top_k: int = 4, course_id: int | None = None) -> list[d
     bình thường (không có ngữ cảnh tài liệu).
 
     Đường truy vấn: cache kết quả (10 phút) → embed câu hỏi (cache 1 giờ)
-    → pgvector (Postgres, 1 query SQL qua HNSW) hoặc Python cosine
+    → pgvector (Postgres, 1 query SQL exact scan) hoặc Python cosine
     (SQLite / khi cột vector chưa có dữ liệu).
     """
     if not (query or "").strip():
